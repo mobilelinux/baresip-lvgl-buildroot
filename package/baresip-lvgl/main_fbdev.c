@@ -44,6 +44,10 @@ static void ui_loop_cb(void) {
     lv_tick_inc(elapsed);
     last_tick = current_tick;
   }
+  
+  // Process Video Frames
+  baresip_manager_process_video();
+  
   lv_timer_handler();
 }
 
@@ -288,6 +292,7 @@ int main(void) {
   printf("Main: Step 3 - Config and Logger initialized\n");
 
   if (baresip_manager_init() != 0) {
+    printf("Main: Baresip Manager Init FAILED via printf\n");
     log_error("Main", "Failed to initialize Baresip Manager");
     return 1;
   }
@@ -298,7 +303,7 @@ int main(void) {
     goto cleanup;
   }
 
-  log_info("Main", "Registering applets...");
+  printf("Main: Registering applets...\n");
   home_applet_register();
   settings_applet_register();
   calculator_applet_register();
@@ -307,7 +312,7 @@ int main(void) {
   call_log_applet_register();
   about_applet_register();
 
-  log_info("Main", "Initializing background services...");
+  printf("Main: Initializing background services...\n");
   int count = 0;
   applet_t **applets = applet_manager_get_all(&count);
   if (applets) {
@@ -326,7 +331,8 @@ int main(void) {
             }
           } else {
             applets[i]->state = APPLET_STATE_PAUSED;
-            log_info("Main", "Call applet background services initialized");
+            printf("Main: Call applet background services initialized\n");
+            fflush(stdout);
           }
         }
         break;
@@ -334,16 +340,19 @@ int main(void) {
     }
   }
 
-  log_info("Main", "Launching home screen...");
+  printf("Main: Launching home screen...\n");
+  fflush(stdout);
   if (applet_manager_launch("Home") != 0) {
     log_error("Main", "Failed to launch home screen");
     return 1;
   }
 
-  log_info("Main", "=== Applet Manager Running (FBDEV) ===");
+  printf("=== Applet Manager Running (FBDEV) ===\n");
+  fflush(stdout);
 
   last_tick = get_tick_ms();
-  log_info("Main", "Entering Baresip Manager Loop...");
+  printf("Main: Entering Baresip Manager Loop...\n");
+  fflush(stdout);
   baresip_manager_loop(ui_loop_cb, 5);
 
 cleanup:

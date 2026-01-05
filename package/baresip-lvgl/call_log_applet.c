@@ -4,6 +4,7 @@
 #include "call_applet.h"
 #include "config_manager.h"
 #include "history_manager.h"
+#include "database_manager.h"
 #include "logger.h"
 #include <stdio.h>
 #include <string.h>
@@ -556,7 +557,7 @@ static void populate_log_list(void) {
   lv_obj_clean(g_call_log_list);
 
   // Add call log entries
-  history_manager_init();
+  // history_manager_init(); // Removed: Already removed initiated by BaresipManager
   int count = history_get_count();
 
   for (int i = 0; i < count; i++) {
@@ -621,14 +622,60 @@ static void populate_log_list(void) {
 
     lv_obj_t *number_label = lv_label_create(details_row);
     char number_display[150];
-    // Strip sip: or sips: prefix for display
-    const char *display_ptr = uri_buf;
-    if (strncmp(display_ptr, "sip:", 4) == 0)
-      display_ptr += 4;
-    else if (strncmp(display_ptr, "sips:", 5) == 0)
-      display_ptr += 5;
+    
+    // Priority: Contact Name (Exact) -> Contact Name (User) -> Stored Name -> Number
+    char contact_name[256];
+    bool found_contact = false;
 
-    snprintf(number_display, sizeof(number_display), "%s", display_ptr);
+    // 1. Try Exact Match
+    if (db_contact_find(uri_buf, contact_name, sizeof(contact_name)) == 0) {
+         found_contact = true;
+    } 
+    // 2. Try User Part (Fuzzy)
+    else {
+        char user_buf[128];
+        strncpy(user_buf, uri_buf, sizeof(user_buf)-1);
+        user_buf[sizeof(user_buf)-1] = '\0';
+        
+        // Strip params (redundant but safe)
+        char *sc = strchr(user_buf, ';');
+        if (sc) *sc = '\0';
+
+        // Find @ to isolate user
+        char *at = strchr(user_buf, '@');
+        if (at) *at = '\0';
+
+        // Strip sip: prefix
+        char *start = user_buf;
+        if (strncmp(start, "sip:", 4) == 0) start += 4;
+        else if (strncmp(start, "sips:", 5) == 0) start += 5;
+
+        // Strip password if present (user:pass)
+        char *colon = strchr(start, ':');
+        if (colon) *colon = '\0';
+
+        if (strlen(start) > 0) {
+             if (db_contact_find(start, contact_name, sizeof(contact_name)) == 0) {
+                 found_contact = true;
+             }
+        }
+    }
+
+    if (found_contact) {
+         snprintf(number_display, sizeof(number_display), "%s", contact_name);
+    } else if (entry->name[0] != '\0' && strcmp(entry->name, "unknown") != 0) {
+         snprintf(number_display, sizeof(number_display), "%s", entry->name);
+    } else {
+         // Fallback to cleaned number
+        // Strip sip: or sips: prefix for display
+        const char *display_ptr = uri_buf;
+        if (strncmp(display_ptr, "sip:", 4) == 0)
+          display_ptr += 4;
+        else if (strncmp(display_ptr, "sips:", 5) == 0)
+          display_ptr += 5;
+    
+        snprintf(number_display, sizeof(number_display), "%s", display_ptr);
+    }
 
     lv_label_set_text(number_label, number_display);
     lv_obj_set_style_text_color(number_label, lv_color_hex(0x808080),
@@ -684,14 +731,14 @@ static int call_log_init(applet_t *applet) {
   lv_obj_set_flex_flow(header, LV_FLEX_FLOW_ROW);
   lv_obj_set_flex_align(header, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER,
                         LV_FLEX_ALIGN_CENTER);
-
+  // Back button
   lv_obj_t *back_btn = lv_btn_create(header);
   lv_obj_set_size(back_btn, 50, 40);
   lv_obj_t *back_label = lv_label_create(back_btn);
-  lv_label_set_text(back_label, LV_SYMBOL_LEFT);
+  lv_label_set_text(back_label, "<");
+  lv_obj_set_style_text_font(back_label, &lv_font_montserrat_32, 0);
   lv_obj_center(back_label);
   lv_obj_add_event_cb(back_btn, back_btn_clicked, LV_EVENT_CLICKED, NULL);
-
   lv_obj_t *title = lv_label_create(header);
   lv_label_set_text(title, "Call Log");
   lv_obj_set_style_text_font(title, &lv_font_montserrat_24, 0);
@@ -702,7 +749,9 @@ static int call_log_init(applet_t *applet) {
   lv_obj_set_size(g_call_log_list, LV_PCT(95), LV_PCT(80));
   lv_obj_align(g_call_log_list, LV_ALIGN_BOTTOM_MID, 0, -10);
   lv_obj_set_flex_flow(g_call_log_list, LV_FLEX_FLOW_COLUMN);
+  lv_obj_set_flex_flow(g_call_log_list, LV_FLEX_FLOW_COLUMN);
   lv_obj_set_scroll_dir(g_call_log_list, LV_DIR_VER);
+  lv_obj_add_flag(g_call_log_list, LV_OBJ_FLAG_GESTURE_BUBBLE); // Allow horizontal swipe to bubble
 
   // Add call log entries
   populate_log_list();

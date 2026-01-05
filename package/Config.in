@@ -2450,6 +2450,7 @@ endif
 	source "package/axel/Config.in"
 	source "package/babeld/Config.in"
 	source "package/bandwidthd/Config.in"
+	source "package/baresip-lvgl/Config.in"
 	source "package/batctl/Config.in"
 	source "package/bcusdk/Config.in"
 	source "package/bind/Config.in"

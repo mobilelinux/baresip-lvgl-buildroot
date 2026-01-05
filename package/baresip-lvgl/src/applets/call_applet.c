@@ -11,7 +11,7 @@
 #define MAX_ACCOUNTS 10
 #define CONFIG_DIR ".baresip-lvgl"
 
-#include "baresip_manager.h"
+#include "../baresip_manager.h"
 #include "call_applet.h"
 #include "config_manager.h"
 
@@ -25,6 +25,12 @@ static const char *codec_names[] = {"G.711 PCMU", "G.711 PCMA", "Opus", "G.722",
                                     "GSM"};
 
 // Call applet data
+
+// Start call_info_t definition
+// call_info_t struct definition moved to baresip_manager.h
+
+// End call_info_t definition
+
 typedef struct {
   // Screens
   lv_obj_t *dialer_screen;
@@ -134,6 +140,14 @@ static void update_call_duration(lv_timer_t *timer);
 static void update_call_list(call_data_t *data, void *ignore_id);
 static void load_settings(call_data_t *data);
 static void dropdown_event_cb(lv_event_t *e);
+
+static void handle_swipe_back(lv_event_t *e) {
+    lv_dir_t dir = lv_indev_get_gesture_dir(lv_indev_get_act());
+    if (dir == LV_DIR_RIGHT || dir == LV_DIR_LEFT) {
+        log_info("CallApplet", "Swipe detected (Dir: %d), going back", dir);
+        applet_manager_back();
+    }
+}
 
 static void update_account_status(call_data_t *data, int account_idx,
                                   reg_status_t status);
@@ -794,12 +808,22 @@ static void show_active_call_screen(call_data_t *data, const char *number,
   }
 
   if (data->call_number_label) {
-    char formatted_number[256];
-    format_sip_uri(number, formatted_number, sizeof(formatted_number));
-    lv_label_set_text(data->call_number_label, formatted_number);
+    char display_name[256];
+    baresip_manager_get_current_call_display_name(display_name, sizeof(display_name));
+    
+    // Fallback if no call active (e.g. setting up)
+    if (strlen(display_name) == 0) {
+         format_sip_uri(number, display_name, sizeof(display_name));
+    }
+    
+    // Name Label gets Priority Name
+    if (data->call_name_label) {
+         lv_label_set_text(data->call_name_label, display_name);
+    }
+    
+    // Number Label gets URI (for reference)
+    lv_label_set_text(data->call_number_label, number);
   }
-  if (data->call_name_label)
-    lv_label_set_text(data->call_name_label, "Unknown");
 
   if (data->call_status_label) {
     lv_label_set_text(data->call_status_label,
@@ -1892,9 +1916,16 @@ static void check_ui_updates(lv_timer_t *t) {
     return;
 
   data->ui_update_needed = false;
-  enum call_state state = data->pending_state;
+  enum call_state state = baresip_manager_get_state(); // Force Sync (Zombie fix)
+  // enum call_state state = data->pending_state;
   const char *peer = data->pending_peer_uri;
   bool incoming = data->pending_incoming;
+
+  // Handle IDLE (e.g. Zombie Cleanup result)
+  if (state == CALL_STATE_IDLE) {
+       show_dialer_screen(data);
+       return;
+  }
 
   log_info("CallApplet",
            "Processing UI Update: State=%d, Peer='%s', Incoming=%d", state,
@@ -1954,9 +1985,10 @@ static void check_ui_updates(lv_timer_t *t) {
     baresip_manager_set_local_video_rect(0, 0, 0, 0);
 
     // Return to dialer after delay
+    // Return to dialer after delay
     if (!data->exit_timer) {
-      log_info("CallApplet", "Starting exit timer (2s delay)");
-      data->exit_timer = lv_timer_create(exit_timer_cb, 2000, data);
+      log_info("CallApplet", "Starting exit timer (1s delay)");
+      data->exit_timer = lv_timer_create(exit_timer_cb, 1000, data);
       lv_timer_set_repeat_count(data->exit_timer, 1);
     }
   } else if (state == CALL_STATE_RINGING || state == CALL_STATE_EARLY) {
@@ -2113,23 +2145,33 @@ static int call_init(applet_t *applet) {
   lv_obj_set_style_pad_all(active_call_cont, 0, 0);
   // Set background to OPAQUE to prevent "Solitaire effect" / tearing
   // unless we actually HAVE video. For now, safefy first: Opaque Dark Grey.
+  // Set background to TRANSPARENT so video behind it is visible
   lv_obj_set_style_bg_color(active_call_cont, lv_color_hex(0x222222), 0);
-  lv_obj_set_style_bg_opa(active_call_cont, LV_OPA_COVER, 0); 
+  lv_obj_set_style_bg_opa(active_call_cont, LV_OPA_TRANSP, 0); 
   lv_obj_set_style_border_width(active_call_cont, 0, 0); // No border
   lv_obj_clear_flag(active_call_cont, LV_OBJ_FLAG_SCROLLABLE);
 
-  // Ensure root applet screen is OPAQUE black to clear artifacts at edges
-  lv_obj_set_style_bg_color(applet->screen, lv_color_black(), 0);
+  // Ensure root applet screen is OPAQUE WHITE to match other screens
+  lv_obj_set_style_bg_color(applet->screen, lv_color_white(), 0);
   lv_obj_set_style_bg_opa(applet->screen, LV_OPA_COVER, 0);
+
+  // Back button removed from Active Call screen (Gesture only)
 
   // Side List for multiple calls (Created FIRST to be on LEFT)
   data->call_list_cont = lv_obj_create(active_call_cont);
   lv_obj_set_width(data->call_list_cont, 220);
   lv_obj_set_height(data->call_list_cont, LV_PCT(100));
-  lv_obj_set_style_bg_color(data->call_list_cont, lv_color_hex(0x222222), 0);
+  // Keep list slightly distinct, maybe light grey? Or transparent?
+  // User asked for white. Let's make it transparent so it inherits white.
+  lv_obj_set_style_bg_opa(data->call_list_cont, LV_OPA_TRANSP, 0);
+  // Add a border separator
+  lv_obj_set_style_border_width(data->call_list_cont, 0, 0);
+  lv_obj_set_style_border_side(data->call_list_cont, LV_BORDER_SIDE_RIGHT, 0);
+  lv_obj_set_style_border_width(data->call_list_cont, 1, 0);
+  lv_obj_set_style_border_color(data->call_list_cont, lv_palette_main(LV_PALETTE_GREY), 0);
+  
   lv_obj_set_flex_flow(data->call_list_cont, LV_FLEX_FLOW_COLUMN);
   lv_obj_set_style_pad_all(data->call_list_cont, 5, 0);
-  lv_obj_set_style_border_width(data->call_list_cont, 0, 0);
   lv_obj_add_flag(data->call_list_cont,
                   LV_OBJ_FLAG_HIDDEN); // Hidden by default
 
@@ -2153,7 +2195,7 @@ static int call_init(applet_t *applet) {
   lv_obj_move_background(data->video_cont); // Ensure it is behind UI
 
   // Remote Video (Full container)
-  data->video_remote = lv_obj_create(data->video_cont);
+  data->video_remote = lv_img_create(data->video_cont);
   lv_obj_remove_style_all(data->video_remote);
   lv_obj_set_size(data->video_remote, 800, 480);
   lv_obj_set_pos(data->video_remote, 0, 0);
@@ -2161,19 +2203,19 @@ static int call_init(applet_t *applet) {
   lv_obj_clear_flag(data->video_remote, LV_OBJ_FLAG_SCROLLABLE);
 
   // Local Video (PiP)
-  // Local Video (PiP)
-  data->video_local =
-      lv_obj_create(data->active_call_screen); // Move PiP to Top Layer as well
+  data->video_local = lv_img_create(data->active_call_screen); // PiP on top
   lv_obj_remove_style_all(data->video_local);
   lv_obj_set_style_bg_color(data->video_local, lv_color_black(), 0);
-  lv_obj_set_style_bg_opa(data->video_local, LV_OPA_TRANSP, 0); // Transparent
+  lv_obj_set_style_bg_opa(data->video_local, LV_OPA_COVER, 0); // Opaque black background
   lv_obj_set_size(data->video_local, 160, 120);
   lv_obj_align(data->video_local, LV_ALIGN_TOP_RIGHT, -20, 20);
   // Debug Border
   lv_obj_set_style_border_width(data->video_local, 2, 0);
   lv_obj_set_style_border_color(data->video_local, lv_color_hex(0xFF0000), 0);
-  lv_obj_move_foreground(
-      data->video_local); // Ensure PiP is on top of everything
+  lv_obj_move_foreground(data->video_local);
+
+  // Register Video Objects with Baresip Manager
+  baresip_manager_set_video_objects(data->video_remote, data->video_local);
 
   // --- UI Layer (Layer 1, Overlays) ---
   lv_obj_t *ui_layer = lv_obj_create(data->call_main_area);
@@ -2201,14 +2243,8 @@ static int call_init(applet_t *applet) {
   data->call_name_label = lv_label_create(top_info);
   lv_label_set_text(data->call_name_label, ""); // Default empty
   lv_obj_set_style_text_font(data->call_name_label, &lv_font_montserrat_24, 0);
-  lv_obj_set_style_text_color(data->call_name_label, lv_color_white(),
-                              0); // Always white? Or dark if white
-                                  // bg?
-  // If video is background, white is good.
-  // If no video, we usually have white bg.
-  // We need dynamic text color or shadow.
-  // For now, let's keep it simple. If we
-  // have video, we might need text shadow.
+  lv_obj_set_style_text_color(data->call_name_label, lv_color_black(),
+                              0); // CHANGED TO BLACK
 
   data->call_number_label = lv_label_create(top_info);
   lv_label_set_text(data->call_number_label,
@@ -2222,10 +2258,11 @@ static int call_init(applet_t *applet) {
 
   data->call_duration_label = lv_label_create(top_info);
   lv_label_set_text(data->call_duration_label, "00:00");
+  lv_obj_set_style_text_color(data->call_duration_label, lv_color_black(), 0); // Explicitly Black
 
   data->call_status_label = lv_label_create(top_info);
   lv_label_set_text(data->call_status_label, "Dialing...");
-  lv_obj_set_style_text_color(data->call_status_label, lv_color_white(), 0);
+  lv_obj_set_style_text_color(data->call_status_label, lv_color_black(), 0); // CHANGED TO BLACK
   lv_obj_set_style_text_font(data->call_status_label, &lv_font_montserrat_16,
                              0);
 
@@ -2352,10 +2389,12 @@ static int call_init(applet_t *applet) {
   lv_obj_set_flex_align(dialer_header, LV_FLEX_ALIGN_SPACE_BETWEEN,
                         LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
 
+  // Back Button for Dialer
   lv_obj_t *back_btn = lv_btn_create(dialer_header);
   lv_obj_set_size(back_btn, 50, 50);
   lv_obj_t *back_label = lv_label_create(back_btn);
-  lv_label_set_text(back_label, LV_SYMBOL_LEFT);
+  lv_label_set_text(back_label, "<");
+  lv_obj_set_style_text_font(back_label, &lv_font_montserrat_32, 0);
   lv_obj_center(back_label);
   lv_obj_add_event_cb(back_btn, back_to_home, LV_EVENT_CLICKED, NULL);
 
@@ -2477,7 +2516,118 @@ static int call_init(applet_t *applet) {
   strcpy(data->number_buffer, "");
   update_account_dropdowns(data);
 
+  // Gesture Bubbling
+  lv_obj_add_event_cb(applet->screen, handle_swipe_back, LV_EVENT_GESTURE, NULL);
+  lv_obj_add_flag(data->dialer_screen, LV_OBJ_FLAG_GESTURE_BUBBLE);
+  lv_obj_add_flag(data->active_call_screen, LV_OBJ_FLAG_GESTURE_BUBBLE);
+  lv_obj_add_flag(dialer_container, LV_OBJ_FLAG_GESTURE_BUBBLE);
+  lv_obj_add_flag(active_call_cont, LV_OBJ_FLAG_GESTURE_BUBBLE);
+  lv_obj_add_flag(data->call_list_cont, LV_OBJ_FLAG_GESTURE_BUBBLE);
+  lv_obj_add_flag(data->call_main_area, LV_OBJ_FLAG_GESTURE_BUBBLE);
+
   return 0;
+}
+
+
+
+// Helper to check network
+#include <ifaddrs.h>
+#include <net/if.h>
+
+static bool check_network_up(void) {
+    struct ifaddrs *ifaddr, *ifa;
+    if (getifaddrs(&ifaddr) == -1) return false;
+
+    bool found = false;
+    for (ifa = ifaddr; ifa != NULL; ifa = ifa->ifa_next) {
+        if (ifa->ifa_addr == NULL) continue;
+        // Skip loopback
+        if ((ifa->ifa_flags & IFF_LOOPBACK) || !(ifa->ifa_flags & IFF_UP)) continue;
+        
+        // Assume Up if generic non-loopback is found with AF_INET
+        if (ifa->ifa_addr->sa_family == AF_INET) {
+            found = true;
+            break;
+        }
+    }
+    freeifaddrs(ifaddr);
+    return found;
+}
+
+// Public API to Open Call Applet with Number
+void call_applet_open(const char *number) {
+    if (!g_call_data) return;
+    
+    // switch to call applet
+    applet_manager_launch("Call");
+
+    // 1. Check Network
+    if (!check_network_up()) {
+        static const char * btns[] = {"OK", ""};
+        lv_obj_t * m = lv_msgbox_create(NULL, "Error", "No network connection", btns, true);
+        lv_obj_center(m);
+        return;
+    }
+
+    // 2. Check account count
+    if (g_call_data->account_count == 0) {
+        static const char * btns[] = {"OK", ""};
+        lv_obj_t * m = lv_msgbox_create(NULL, "Error", "No account", btns, true);
+        lv_obj_center(m);
+        return;
+    }
+    
+    if (!number || strlen(number) == 0) {
+        show_dialer_screen(g_call_data);
+        return;
+    }
+    
+    // account selection logic
+    bool ambiguous = (g_call_data->config.default_account_index < 0 && g_call_data->account_count > 1);
+    
+    if (ambiguous) {
+        strncpy(g_call_data->pending_number, number, sizeof(g_call_data->pending_number)-1);
+        g_call_data->pending_video = false;
+        show_account_picker(g_call_data);
+    } else {
+        // Direct Dial
+        baresip_manager_call(number);
+    }
+}
+
+void call_applet_video_open(const char *number) {
+    // switch to call applet
+    applet_manager_launch("Call");
+
+    // 1. Check Network
+    if (!check_network_up()) {
+        static const char * btns[] = {"OK", ""};
+        lv_obj_t * m = lv_msgbox_create(NULL, "Error", "No network connection", btns, true);
+        lv_obj_center(m);
+        return;
+    }
+
+    // 2. Check account count
+    if (g_call_data->account_count == 0) {
+        static const char * btns[] = {"OK", ""};
+        lv_obj_t * m = lv_msgbox_create(NULL, "Error", "No account", btns, true);
+        lv_obj_center(m);
+        return;
+    }
+    
+    if (!number || strlen(number) == 0) {
+        show_dialer_screen(g_call_data);
+        return;
+    }
+    
+    bool ambiguous = (g_call_data->config.default_account_index < 0 && g_call_data->account_count > 1);
+     if (ambiguous) {
+        strncpy(g_call_data->pending_number, number, sizeof(g_call_data->pending_number)-1);
+        g_call_data->pending_video = true;
+        show_account_picker(g_call_data);
+    } else {
+        baresip_manager_videocall(number);
+    }
 }
 
 static void call_start(applet_t *applet) {

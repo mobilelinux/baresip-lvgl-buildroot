@@ -19,58 +19,31 @@ int db_init(void) {
   int rc = sqlite3_open(path, &g_db);
   if (rc) {
     printf("DatabaseManager: ERROR: Can't open database: %s\n", sqlite3_errmsg(g_db));
-    log_error("DatabaseManager", "Can't open database: %s",
-              sqlite3_errmsg(g_db));
+    // log_warn("DatabaseManager", "Can't open database: %s", sqlite3_errmsg(g_db));
     return -1;
   }
-
   printf("DatabaseManager: SUCCESS: Opened database at %s\n", path);
-  log_info("DatabaseManager", "Opened database at %s", path);
-
+  
   // Create Contacts table
-  const char *sql_contacts = "CREATE TABLE IF NOT EXISTS contacts ("
-                             "id INTEGER PRIMARY KEY AUTOINCREMENT, "
-                             "name TEXT NOT NULL, "
-                             "number TEXT NOT NULL);";
-
   char *errmsg = NULL;
-  rc = sqlite3_exec(g_db, sql_contacts, 0, 0, &errmsg);
+  rc = sqlite3_exec(g_db, "CREATE TABLE IF NOT EXISTS contacts (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, number TEXT NOT NULL);", NULL, NULL, &errmsg);
   if (rc != SQLITE_OK) {
-    log_error("DatabaseManager", "SQL error (create contacts): %s", errmsg);
-    sqlite3_free(errmsg);
-    return -1;
+      log_error("DatabaseManager", "Failed to create contacts table: %s", errmsg);
+      sqlite3_free(errmsg);
   }
 
-  // Try to add is_favorite column (ignore error if exists)
-  // This is a simple migration strategy
-  const char *sql_alter =
-      "ALTER TABLE contacts ADD COLUMN is_favorite INTEGER DEFAULT 0;";
-  sqlite3_exec(g_db, sql_alter, 0, 0, NULL);
+  // Add is_favorite
+  sqlite3_exec(g_db, "ALTER TABLE contacts ADD COLUMN is_favorite INTEGER DEFAULT 0;", NULL, NULL, NULL);
 
-  // Create Call Log table
-  const char *sql_history = "CREATE TABLE IF NOT EXISTS call_log ("
-                            "id INTEGER PRIMARY KEY AUTOINCREMENT, "
-                            "name TEXT, "
-                            "number TEXT, "
-                            "type INTEGER, "
-                            "timestamp INTEGER);";
-
-  rc = sqlite3_exec(g_db, sql_history, 0, 0, &errmsg);
+  // Create Call Log
+  rc = sqlite3_exec(g_db, "CREATE TABLE IF NOT EXISTS call_log (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, number TEXT, type INTEGER, timestamp INTEGER, account_aor TEXT);", NULL, NULL, &errmsg);
   if (rc != SQLITE_OK) {
-    log_error("DatabaseManager", "SQL error (create call_log): %s", errmsg);
-    sqlite3_free(errmsg);
-    return -1;
+      log_error("DatabaseManager", "Failed to create call_log table: %s", errmsg);
+      sqlite3_free(errmsg);
   }
 
-  // Try to add account_aor column (ignore error if exists)
-  const char *sql_alter_log =
-      "ALTER TABLE call_log ADD COLUMN account_aor TEXT;";
-  sqlite3_exec(g_db, sql_alter_log, 0, 0, NULL);
-
-  // Fix incorrect default contact number (Migration)
-  const char *sql_fix_contact = "UPDATE contacts SET number = 'sip:808086@fanvil.com' "
-                                "WHERE number = 'sip:8080866@fanvil.com';";
-  sqlite3_exec(g_db, sql_fix_contact, 0, 0, NULL);
+  // Migration: Fix number
+  sqlite3_exec(g_db, "UPDATE contacts SET number = 'sip:808086@fanvil.com' WHERE number = 'sip:8080866@fanvil.com';", NULL, NULL, NULL);
 
   return 0;
 }
@@ -84,3 +57,91 @@ void db_close(void) {
 }
 
 sqlite3 *db_get_handle(void) { return g_db; }
+
+int db_contact_find(const char *number, char *name_out, size_t size) {
+  if (!g_db || !number || !name_out || size == 0) return -1;
+  const char *sql = "SELECT name FROM contacts WHERE number = ?;";
+  sqlite3_stmt *stmt;
+  int rc = sqlite3_prepare_v2(g_db, sql, -1, &stmt, NULL);
+  if (rc != SQLITE_OK) return -1;
+  
+  sqlite3_bind_text(stmt, 1, number, -1, SQLITE_STATIC);
+  int result = -1;
+  if (sqlite3_step(stmt) == SQLITE_ROW) {
+      const char *name = (const char *)sqlite3_column_text(stmt, 0);
+      if (name) {
+          strncpy(name_out, name, size - 1);
+          name_out[size - 1] = '\0';
+          result = 0;
+      }
+  }
+  sqlite3_finalize(stmt);
+  return result;
+}
+
+int db_get_contacts(db_contact_t *contacts, int max_count) {
+    if (!g_db || !contacts || max_count <= 0) return 0;
+    
+    const char *sql = "SELECT id, name, number FROM contacts LIMIT ?;";
+    sqlite3_stmt *stmt;
+    int rc = sqlite3_prepare_v2(g_db, sql, -1, &stmt, NULL);
+    if (rc != SQLITE_OK) {
+        log_error("DatabaseManager", "Failed to prepare get_contacts: %s", sqlite3_errmsg(g_db));
+        return 0;
+    }
+    
+    sqlite3_bind_int(stmt, 1, max_count);
+    
+    int count = 0;
+    while (sqlite3_step(stmt) == SQLITE_ROW && count < max_count) {
+        db_contact_t *c = &contacts[count];
+        c->id = sqlite3_column_int(stmt, 0);
+        
+        const char *name = (const char *)sqlite3_column_text(stmt, 1);
+        if (name) strncpy(c->name, name, sizeof(c->name)-1);
+        else c->name[0] = 0;
+        
+        const char *num = (const char *)sqlite3_column_text(stmt, 2);
+        if (num) strncpy(c->number, num, sizeof(c->number)-1);
+        else c->number[0] = 0;
+        
+        count++;
+    }
+    
+    sqlite3_finalize(stmt);
+    return count;
+}
+
+int db_get_favorite_contacts(db_contact_t *contacts, int max_count) {
+    if (!g_db || !contacts || max_count <= 0) return 0;
+    
+    // Filter by is_favorite = 1
+    const char *sql = "SELECT id, name, number FROM contacts WHERE is_favorite=1 LIMIT ?;";
+    sqlite3_stmt *stmt;
+    int rc = sqlite3_prepare_v2(g_db, sql, -1, &stmt, NULL);
+    if (rc != SQLITE_OK) {
+        log_error("DatabaseManager", "Failed to prepare get_favorites: %s", sqlite3_errmsg(g_db));
+        return 0;
+    }
+    
+    sqlite3_bind_int(stmt, 1, max_count);
+    
+    int count = 0;
+    while (sqlite3_step(stmt) == SQLITE_ROW && count < max_count) {
+        db_contact_t *c = &contacts[count];
+        c->id = sqlite3_column_int(stmt, 0);
+        
+        const char *name = (const char *)sqlite3_column_text(stmt, 1);
+        if (name) strncpy(c->name, name, sizeof(c->name)-1);
+        else c->name[0] = 0;
+        
+        const char *num = (const char *)sqlite3_column_text(stmt, 2);
+        if (num) strncpy(c->number, num, sizeof(c->number)-1);
+        else c->number[0] = 0;
+        
+        count++;
+    }
+    
+    sqlite3_finalize(stmt);
+    return count;
+}

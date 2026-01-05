@@ -134,6 +134,14 @@ static void sanitize_input(char *str) {
   }
 }
 
+static void handle_swipe_back(lv_event_t *e) {
+    lv_dir_t dir = lv_indev_get_gesture_dir(lv_indev_get_act());
+    if (dir == LV_DIR_RIGHT || dir == LV_DIR_LEFT) {
+        log_info("SettingsApplet", "Swipe detected (Dir: %d), going back", dir);
+        applet_manager_back();
+    }
+}
+
 // Event handler for back button
 static void back_btn_clicked(lv_event_t *e) { applet_manager_back(); }
 
@@ -1098,6 +1106,7 @@ static int settings_init(applet_t *applet) {
   load_settings(data);
 
   // Create Screens
+  lv_obj_add_event_cb(applet->screen, handle_swipe_back, LV_EVENT_GESTURE, NULL);
   data->main_screen = lv_obj_create(applet->screen);
   data->account_settings_screen = lv_obj_create(applet->screen);
   data->call_settings_screen = lv_obj_create(applet->screen);
@@ -1117,6 +1126,11 @@ static int settings_init(applet_t *applet) {
   lv_obj_add_flag(data->account_form_screen, LV_OBJ_FLAG_HIDDEN);
 
   // --- MAIN SCREEN ---
+  lv_obj_add_flag(data->main_screen, LV_OBJ_FLAG_GESTURE_BUBBLE);
+  lv_obj_add_flag(data->account_settings_screen, LV_OBJ_FLAG_GESTURE_BUBBLE);
+  lv_obj_add_flag(data->call_settings_screen, LV_OBJ_FLAG_GESTURE_BUBBLE);
+  lv_obj_add_flag(data->account_form_screen, LV_OBJ_FLAG_GESTURE_BUBBLE);
+
   lv_obj_t *header = lv_obj_create(data->main_screen);
   lv_obj_set_size(header, LV_PCT(100), 60);
   lv_obj_set_scrollbar_mode(header, LV_SCROLLBAR_MODE_OFF);
@@ -1141,6 +1155,7 @@ static int settings_init(applet_t *applet) {
   lv_obj_t *main_list = lv_list_create(data->main_screen);
   lv_obj_set_size(main_list, LV_PCT(90), LV_PCT(80));
   lv_obj_align(main_list, LV_ALIGN_BOTTOM_MID, 0, -20);
+  lv_obj_add_flag(main_list, LV_OBJ_FLAG_GESTURE_BUBBLE);
 
   lv_obj_t *btn_call =
       lv_list_add_btn(main_list, LV_SYMBOL_SETTINGS, "System Settings");

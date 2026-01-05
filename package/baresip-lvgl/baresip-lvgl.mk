@@ -9,7 +9,7 @@ BARESIP_LVGL_SITE = https://github.com/mobilelinux/baresip-lvgl.git
 BARESIP_LVGL_SITE_METHOD = git
 BARESIP_LVGL_LICENSE = Apache-2.0
 BARESIP_LVGL_LICENSE_FILES = LICENSE
-BARESIP_LVGL_DEPENDENCIES = openssl zlib opus sqlite
+BARESIP_LVGL_DEPENDENCIES = openssl zlib opus sqlite ffmpeg
 
 # GIT_SUBMODULES disabled because .gitmodules is missing/broken in the repo.
 # We must manually fetch dependencies (re, rem, baresip) into deps/
@@ -33,10 +33,19 @@ define BARESIP_LVGL_PREPARE_SOURCE
 	
 	# Replace applets with modified versions
 	cp package/baresip-lvgl/src/applets/call_applet.c $(@D)/src/applets/call_applet.c
+	cp package/baresip-lvgl/call_log_applet.c $(@D)/src/applets/call_log_applet.c
 	cp package/baresip-lvgl/settings_applet.c $(@D)/src/applets/settings_applet.c
+	cp package/baresip-lvgl/home_applet.c $(@D)/src/applets/home_applet.c
+	cp package/baresip-lvgl/src/applets/about_applet.c $(@D)/src/applets/about_applet.c
+	$(SED) 's|/usr/bin/sqlite3|/usr/bin/sqlite3|g' $(@D)/src/manager/history_manager.c
 	
 	# Copy fake SDL header to include dir where it's found reliably
 	cp package/baresip-lvgl/fake_sdl/SDL.h $(@D)/include/SDL.h
+	
+	# Copy reconstructed header to include to override any stale version
+	cp package/baresip-lvgl/baresip_manager.h $(@D)/include/baresip_manager.h
+	# Copy reconstructed header to src as well (for applets using relative path)
+	cp package/baresip-lvgl/baresip_manager.h $(@D)/src/baresip_manager.h
 	
 	# Use provided CMakeLists.txt (rewritten for in-tree support)
 	cp package/baresip-lvgl/CMakeLists.txt $(@D)/CMakeLists.txt
@@ -51,13 +60,7 @@ define BARESIP_LVGL_PREPARE_SOURCE
 	sed -i 's/find_package(REM/# find_package(REM/g' $(@D)/deps/baresip/CMakeLists.txt
 	sed -i 's/find_package(rem/# find_package(rem/g' $(@D)/deps/baresip/CMakeLists.txt
 	
-	# Force disable FFMPEG to prevent avcodec crash
-	sed -i 's/find_package(FFMPEG/# find_package(FFMPEG/g' $(@D)/deps/baresip/CMakeLists.txt
-	sed -i 's/find_package(FFmpeg/# find_package(FFmpeg/g' $(@D)/deps/baresip/CMakeLists.txt
-	
-	# Force disable FFMPEG and SDL2 variables
-	sed -i '1i set(FFMPEG_FOUND FALSE CACHE BOOL "Force Disable" FORCE)' $(@D)/deps/baresip/CMakeLists.txt
-	sed -i '1i set(FFmpeg_FOUND FALSE CACHE BOOL "Force Disable" FORCE)' $(@D)/deps/baresip/CMakeLists.txt
+	# Force disable SDL2 variables (We use fake_sdl)
 	sed -i '1i set(SDL2_FOUND FALSE CACHE BOOL "Force Disable" FORCE)' $(@D)/deps/baresip/CMakeLists.txt
 	sed -i '1i set(ALSA_FOUND FALSE CACHE BOOL "Force Disable" FORCE)' $(@D)/deps/baresip/CMakeLists.txt
 	
@@ -80,14 +83,12 @@ define BARESIP_LVGL_PREPARE_SOURCE
 
 	# Patch database_manager.c: Replace with custom version
 	cp package/baresip-lvgl/database_manager.c $(@D)/src/manager/database_manager.c
+	cp package/baresip-lvgl/database_manager.h $(@D)/src/manager/
+	cp package/baresip-lvgl/database_manager.h $(@D)/include/
+	cp package/baresip-lvgl/applet_manager.c $(@D)/src/manager/
 
 	# Fix baresip.h missing includes (critical for v2.12.0)
 	sed -i '1i #include <stdint.h>\n#include <stddef.h>\n#include <re.h>' $(@D)/deps/baresip/include/baresip.h
-
-	# Remove avcodec module to prevent build (causes crash on QEMU)
-	rm -rf $(@D)/deps/baresip/modules/avcodec
-	# Patch modules.cmake to prevent adding avcodec to MODULES list
-	sed -i '/if(FFMPEG_FOUND)/,/endif()/d' $(@D)/deps/baresip/cmake/modules.cmake
 	
 	# Force disable tests in baresip/CMakeLists.txt (Fixes mod_table link error)
 	sed -i 's/add_subdirectory(test)/# add_subdirectory(test)/g' $(@D)/deps/baresip/CMakeLists.txt

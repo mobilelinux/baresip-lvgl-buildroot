@@ -7,7 +7,7 @@ case "$1" in
   start)
 	echo "Starting baresip-lvgl..."
 	# Ensure audio/video devices are ready
-	/usr/bin/baresip-lvgl > /var/log/baresip.log 2>&1 &
+	/usr/bin/baresip-lvgl &
 	;;
   stop)
 	echo "Stopping baresip-lvgl..."

@@ -54,6 +54,7 @@ include_directories(
     .
     deps/baresip/include
     deps/re/include
+    src/manager
     deps/rem/include
 )
 
