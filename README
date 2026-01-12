@@ -24,3 +24,7 @@ You can also find us on #buildroot on OFTC IRC.
 
 If you would like to contribute patches, please read
 https://buildroot.org/manual.html#submitting-patches
+
+**********************************************************************
+add baresip,lvgl,baresip-lvgl(sip app) to buildroot, please read baresip-lvgl README:
+https://github.com/mobilelinux/baresip-lvgl-buildroot/blob/main/package/baresip-lvgl/README.md
