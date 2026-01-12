@@ -32,6 +32,7 @@ int applet_manager_register(applet_t *applet) {
 
 // Global gesture handler
 static void global_gesture_handler(lv_event_t *e) {
+  (void)e;
   lv_dir_t dir = lv_indev_get_gesture_dir(lv_indev_get_act());
   // User requested "slide left-right" support.
   // We treat BOTH directions as "Back" for now to match user expectation of "swip left" response.
@@ -119,6 +120,17 @@ int applet_manager_launch_applet(applet_t *applet) {
 
   log_info("AppletManager", "Launched applet: %s", applet->name);
   return 0;
+}
+
+applet_t *applet_manager_get_applet(const char *name) {
+  if (!name) return NULL;
+
+  for (int i = 0; i < g_manager.applet_count; i++) {
+    if (strcmp(g_manager.applets[i]->name, name) == 0) {
+      return g_manager.applets[i];
+    }
+  }
+  return NULL;
 }
 
 int applet_manager_launch(const char *name) {

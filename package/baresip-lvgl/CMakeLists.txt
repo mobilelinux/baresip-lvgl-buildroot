@@ -56,6 +56,8 @@ include_directories(
     deps/re/include
     src/manager
     deps/rem/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/ui
 )
 
 # Source Files
@@ -73,7 +75,7 @@ file(GLOB_RECURSE APP_SOURCES
 
 # Module Sources
 set(MODULE_SOURCES
-    src/modules/gb28181/gb28181.c
+    # src/modules/gb28181/gb28181.c
 )
 
 # Executable

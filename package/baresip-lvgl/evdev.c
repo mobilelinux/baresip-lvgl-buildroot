@@ -214,8 +214,9 @@ void evdev_read(lv_indev_drv_t * drv, lv_indev_data_t * data)
 				#endif
             }
         } else if(in.type == EV_ABS) {
-            // if (in.code == ABS_X) printf("EVDEV: Raw ABS_X=%d\n", in.value);
-            // else if (in.code == ABS_Y) printf("EVDEV: Raw ABS_Y=%d\n", in.value);
+            // DEBUG RAW
+            if (in.code == ABS_X) printf("EVDEV: Raw ABS_X=%d (Max=%d)\n", in.value, evdev_hor_max);
+            else if (in.code == ABS_Y) printf("EVDEV: Raw ABS_Y=%d (Max=%d)\n", in.value, evdev_ver_max);
 
             if(in.code == ABS_X)
 				#if EVDEV_SWAP_AXES

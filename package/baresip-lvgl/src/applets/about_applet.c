@@ -1,5 +1,6 @@
 #include "applet.h"
 #include "applet_manager.h"
+#include "../ui/ui_helpers.h"
 #include "lvgl.h"
 
 static lv_obj_t *about_screen;
@@ -70,43 +71,21 @@ static void about_applet_start(void) {
   lv_obj_add_flag(about_screen, LV_OBJ_FLAG_CLICKABLE); 
 
   // Header
-  lv_obj_t *header = lv_obj_create(about_screen);
-  lv_obj_set_size(header, LV_PCT(100), 60);
-  lv_obj_set_style_bg_color(header, lv_palette_main(LV_PALETTE_LIGHT_BLUE),
-                            0); // Blue header
-  lv_obj_set_style_pad_all(header, 0, 0);
-  lv_obj_set_layout(header, LV_LAYOUT_FLEX);
-  lv_obj_set_flex_align(header, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER,
-                        LV_FLEX_ALIGN_CENTER);
-
-  lv_obj_t *back_btn = lv_btn_create(header);
-  lv_obj_set_size(back_btn, 40, 40);
-  lv_obj_set_style_bg_opa(back_btn, 0, 0);
-  lv_obj_set_style_shadow_width(back_btn, 0, 0);
-
-  lv_obj_t *back_icon = lv_label_create(back_btn);
-  lv_label_set_text(back_icon, LV_SYMBOL_LEFT);
-  lv_obj_center(back_icon);
-  lv_obj_add_event_cb(back_btn, back_btn_clicked, LV_EVENT_CLICKED, NULL);
-
-  lv_obj_t *title = lv_label_create(header);
-  lv_label_set_text(title, "About baresip+");
-  lv_obj_set_style_text_font(title, &lv_font_montserrat_20, 0);
-  lv_obj_set_style_text_color(title, lv_color_white(), 0);
+  // Use common title bar
+  ui_create_title_bar(about_screen, "About baresip+", true, back_btn_clicked, NULL);
 
   // Content
   lv_obj_t *content = lv_obj_create(about_screen);
   lv_obj_set_size(content, LV_PCT(100),
                   LV_PCT(100)); // Will be constrained by header
-  lv_obj_set_pos(content, 0, 60);
-  lv_obj_set_height(content, LV_PCT(90)); // Approx
+  // Content position managed by Flex container
 
   // Re-do layout: Main screen column
   lv_obj_set_flex_flow(about_screen, LV_FLEX_FLOW_COLUMN);
   lv_obj_set_flex_align(about_screen, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START,
                         LV_FLEX_ALIGN_START);
   lv_obj_set_style_pad_all(about_screen, 0, 0);
-  lv_obj_set_layout(header, LV_LAYOUT_FLEX); // Header is flex row
+  //lv_obj_set_layout(header, LV_LAYOUT_FLEX); // Header is flex row
 
   // Content is scrolalble
   lv_obj_set_flex_grow(content, 1);
@@ -172,6 +151,7 @@ static void about_applet_start_wrapper(applet_t *self) {
 
 static void about_applet_stop_wrapper(applet_t *self) {
   (void)self;
+  about_applet_stop();
 }
 
 static void about_applet_destroy_wrapper(applet_t *self) {

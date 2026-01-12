@@ -35,6 +35,7 @@ typedef struct {
 // Callbacks
 typedef void (*call_event_cb)(enum call_state state, const char *peer_uri, void *call_ptr);
 typedef void (*reg_event_cb)(const char *aor, reg_status_t status);
+typedef void (*message_event_cb)(const char *peer_uri, const char *msg);
 
 // Functions
 int baresip_manager_init(void);
@@ -57,15 +58,20 @@ int baresip_manager_get_active_calls(call_info_t *calls, int max_count);
 void baresip_manager_mute(bool mute);
 bool baresip_manager_is_muted(void);
 
+// SIP Messaging
+int baresip_manager_send_message(const char *uri, const char *text);
+
 enum call_state baresip_manager_get_state(void);
 const char *baresip_manager_get_peer(void);
 
 int baresip_manager_account_register(const char *aor);
+int baresip_manager_account_register_simple(const char *user, const char *domain);
 int baresip_manager_add_account(const voip_account_t *acc);
 reg_status_t baresip_manager_get_account_status(const char *aor);
 
 void baresip_manager_set_callback(call_event_cb cb);
 void baresip_manager_set_reg_callback(reg_event_cb cb);
+void baresip_manager_set_message_callback(message_event_cb cb);
 void baresip_manager_set_log_level(int level);
 
 // Video

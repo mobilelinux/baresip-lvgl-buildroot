@@ -58,6 +58,8 @@ int config_load_app_settings(app_config_t *config) {
   config->listen_address[0] = '\0';
   config->address_family = 0; // IPv4
   config->dns_servers[0] = '\0';
+  config->show_favorites = true; // Default to true
+  config->stun_server[0] = '\0';
   config->use_tls_client_cert = 0;
   config->verify_server_cert = 0;
   config->use_tls_ca_file = 0;
@@ -91,6 +93,10 @@ int config_load_app_settings(app_config_t *config) {
           config->address_family = atoi(val);
         else if (strcmp(key, "DNS") == 0)
           strncpy(config->dns_servers, val, sizeof(config->dns_servers)-1);
+        else if (strcmp(key, "ShowFavorites") == 0)
+          config->show_favorites = atoi(val);
+        else if (strcmp(key, "StunServer") == 0)
+          strncpy(config->stun_server, val, sizeof(config->stun_server)-1);
         else if (strcmp(key, "UseTLSCert") == 0)
           config->use_tls_client_cert = atoi(val);
         else if (strcmp(key, "VerifyServerCert") == 0)
@@ -155,7 +161,10 @@ int config_save_app_settings(const app_config_t *config) {
   fprintf(fp, "StartAuto=%d\n", config->start_automatically);
   fprintf(fp, "ListenAddr=%s\n", config->listen_address);
   fprintf(fp, "AddrFam=%d\n", config->address_family);
+  fprintf(fp, "AddrFam=%d\n", config->address_family);
   fprintf(fp, "DNS=%s\n", config->dns_servers);
+  fprintf(fp, "ShowFavorites=%d\n", config->show_favorites);
+  fprintf(fp, "StunServer=%s\n", config->stun_server);
   fprintf(fp, "UseTLSCert=%d\n", config->use_tls_client_cert);
   fprintf(fp, "VerifyServerCert=%d\n", config->verify_server_cert);
   fprintf(fp, "UseTLSCA=%d\n", config->use_tls_ca_file);
@@ -203,14 +212,16 @@ int config_load_accounts(voip_account_t *accounts, int max_count) {
     // Set defaults
     acc->port = 5060;
     acc->reg_interval = 900;
-    strcpy(acc->media_nat,
-           ""); // Default to no ICE (prevents stunsrv errors if no STUN
-                // server)
+    // acc->media_nat no longer exists. defaults to use_ice
+    // strcpy(acc->media_nat, "");
     strcpy(acc->dtmf_mode, "rtp");
     strcpy(acc->answer_mode, "manual");
     strcpy(acc->audio_codecs,
            "opus/48000/2,PCMU/8000/1,PCMA/8000/1,G722/16000/1");
     strcpy(acc->video_codecs, "H264");
+    strcpy(acc->transport, "udp");
+    acc->use_ice = false;
+    acc->stun_server[0] = '\0';
 
     char line[1024];
     if (fgets(line, sizeof(line), fp)) {
@@ -270,7 +281,8 @@ int config_load_accounts(voip_account_t *accounts, int max_count) {
             if (token) strncpy(acc->media_enc, token, sizeof(acc->media_enc) - 1);
           break;
         case 13:
-            if (token) strncpy(acc->media_nat, token, sizeof(acc->media_nat) - 1);
+            // if (token) strncpy(acc->media_nat, token, sizeof(acc->media_nat) - 1);
+            // Ignore legacy media_nat
           break;
         case 14:
             if (token) acc->rtcp_mux = atoi(token);
@@ -292,6 +304,15 @@ int config_load_accounts(voip_account_t *accounts, int max_count) {
           break;
         case 20:
             if (token) strncpy(acc->video_codecs, token, sizeof(acc->video_codecs) - 1);
+          break;
+        case 21:
+            if (token) strncpy(acc->transport, token, sizeof(acc->transport) - 1);
+          break;
+        case 22:
+            if (token) acc->use_ice = atoi(token);
+          break;
+        case 23:
+            if (token) strncpy(acc->stun_server, token, sizeof(acc->stun_server) - 1);
           break;
         }
         field++;
@@ -358,12 +379,13 @@ int config_save_accounts(const voip_account_t *accounts, int count) {
   for (int i = 0; i < count; i++) {
     const voip_account_t *acc = &accounts[i];
     fprintf(
-        fp, "%s|%s|%s|%s|%d|%d|%s|%s|%s|%s|%s|%d|%s|%s|%d|%d|%s|%s|%s|%s|%s\n",
+        fp, "%s|%s|%s|%s|%d|%d|%s|%s|%s|%s|%s|%d|%s|%s|%d|%d|%s|%s|%s|%s|%s|%s|%d|%s\n",
         acc->display_name, acc->username, acc->password, acc->server, acc->port,
         acc->enabled, acc->realm, acc->outbound_proxy, acc->outbound_proxy2,
         acc->auth_user, acc->nickname, acc->reg_interval, acc->media_enc,
-        acc->media_nat, acc->rtcp_mux, acc->prack, acc->dtmf_mode,
-        acc->answer_mode, acc->vm_uri, acc->audio_codecs, acc->video_codecs);
+        "", acc->rtcp_mux, acc->prack, acc->dtmf_mode,
+        acc->answer_mode, acc->vm_uri, acc->audio_codecs, acc->video_codecs,
+        acc->transport, acc->use_ice, acc->stun_server);
   }
 
   fclose(fp);

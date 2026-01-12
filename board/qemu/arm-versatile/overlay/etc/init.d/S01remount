@@ -1,0 +1,6 @@
+#!/bin/sh
+# Force remount rootfs as RW
+mount -o remount,rw /
+# Ensure baresip config dir exists and is writable
+mkdir -p /root/.baresip-lvgl
+chmod 777 /root/.baresip-lvgl

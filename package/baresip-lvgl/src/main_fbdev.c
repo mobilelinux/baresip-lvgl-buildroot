@@ -20,11 +20,12 @@
 
 extern void home_applet_register(void);
 extern void settings_applet_register(void);
-extern void calculator_applet_register(void);
+//extern void calculator_applet_register(void);
 extern void call_applet_register(void);
 extern void contacts_applet_register(void);
 extern void call_log_applet_register(void);
 extern void about_applet_register(void);
+extern void chat_applet_register(void);
 
 static uint32_t get_tick_ms(void) {
   struct timeval tv;
@@ -141,6 +142,7 @@ static char evdev_key_to_ascii(uint16_t code, bool shift) {
 }
 
 static void keyboard_read(lv_indev_drv_t * drv, lv_indev_data_t * data) {
+    (void)drv;
     if (kbd_fd == -1) return;
 
     struct input_event in;
@@ -306,10 +308,11 @@ int main(void) {
   printf("Main: Registering applets...\n");
   home_applet_register();
   settings_applet_register();
-  calculator_applet_register();
+  //calculator_applet_register();
   call_applet_register();
   contacts_applet_register();
   call_log_applet_register();
+  chat_applet_register();
   about_applet_register();
 
   printf("Main: Initializing background services...\n");

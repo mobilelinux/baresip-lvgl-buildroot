@@ -6,6 +6,14 @@
 #include <rem_vid.h>
 #include <baresip.h>
 
+// Forward Decls for missing/implicit functions
+struct message;
+struct ua;
+struct message *uag_message(void);
+struct ua *uag_current(void);
+struct list *uag_list(void); // Corrected return type
+struct ua *uag_find_msg(const struct sip_msg *msg);
+
 
 #include "baresip_manager.h"
 #include "lvgl.h"
@@ -16,6 +24,9 @@
 #include "applet_manager.h"
 #include "logger.h"
 // Includes cleaned
+
+struct message *uag_message(void);
+struct ua *uag_current(void);
 
 #include <net/if.h>
 #include <re_dbg.h>
@@ -36,6 +47,7 @@ extern const struct mod_export exports_opus;
 extern const struct mod_export exports_account;
 extern const struct mod_export exports_stun;
 extern const struct mod_export exports_turn;
+extern const struct mod_export exports_ice;
 #ifdef __APPLE__
 extern const struct mod_export exports_audiounit;
 extern const struct mod_export exports_coreaudio;
@@ -83,23 +95,67 @@ static struct {
                   .callback = NULL,
                   .reg_callback = NULL,
                   .current_call = NULL,
+                  .current_call = NULL,
                   .account_count = 0};
 
+static message_event_cb g_message_callback = NULL;
+
 // Command Queue for Thread Safety
+typedef enum {
+    CMD_NONE = 0,
+    CMD_ADD_ACCOUNT,
+    CMD_SEND_MESSAGE
+} cmd_type_t;
+
+typedef struct {
+    cmd_type_t type;
+    union {
+        voip_account_t acc;
+        struct {
+            char peer[256];
+            char text[512];
+        } msg;
+    } data;
+} cmd_t;
+
+#define CMD_QUEUE_SIZE 10
 static struct {
-    voip_account_t acc;
-    bool pending;
-} g_pending_cmd;
+    cmd_t items[CMD_QUEUE_SIZE];
+    int head;
+    int tail;
+    int count;
+} g_cmd_queue = {0};
+
 static pthread_mutex_t g_cmd_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+// Queue Helper
+static bool cmd_enqueue(const cmd_t *cmd) {
+    bool ret = false;
+    pthread_mutex_lock(&g_cmd_mutex);
+    if (g_cmd_queue.count < CMD_QUEUE_SIZE) {
+        g_cmd_queue.items[g_cmd_queue.tail] = *cmd;
+        g_cmd_queue.tail = (g_cmd_queue.tail + 1) % CMD_QUEUE_SIZE;
+        g_cmd_queue.count++;
+        ret = true;
+    }
+    pthread_mutex_unlock(&g_cmd_mutex);
+    return ret;
+}
 
 // Watchdog
 static struct tmr watchdog_tmr;
 static void check_call_watchdog(void *arg);
 
-// Forward declaration
+// Messaging Subsystem
+static struct message *g_message = NULL;
 
+// Forward declaration
 static void safe_strncpy(char *dest, const char *src, size_t size) {
-    if (size == 0) return;
+    if (size == 0 || !dest) return;
+    if (!src) {
+        dest[0] = '\0';
+        return;
+    }
     size_t len = strlen(src);
     if (len >= size) len = size - 1;
     memcpy(dest, src, len);
@@ -107,35 +163,39 @@ static void safe_strncpy(char *dest, const char *src, size_t size) {
 }
 
 static int internal_add_account(const voip_account_t *acc);
+static int internal_send_message(const char *peer, const char *text);
 
-static void add_or_update_call(struct call *call, enum call_state state,
-                               const char *peer) {
-  if (!g_call_state.current_call)
-    return;
-  // Find existing
-  for (int i = 0; i < MAX_CALLS; i++) {
-    if (g_call_state.active_calls[i].call == call) {
-      g_call_state.active_calls[i].state = state;
-      if (peer)
-        safe_strncpy(g_call_state.active_calls[i].peer_uri, peer, 256);
-      return;
+static void add_or_update_call(struct call *call, enum call_state state, const char *peer) {
+    if (!call) return;
+    
+    // Check if exists
+    for (int i=0; i<MAX_CALLS; i++) {
+        if (g_call_state.active_calls[i].call == call) {
+            // Update
+            g_call_state.active_calls[i].state = state;
+            if (peer) {
+                safe_strncpy(g_call_state.active_calls[i].peer_uri, peer, 256);
+            }
+            // log_info("BaresipManager", "Updated call %p in slot %d", call, i);
+            return;
+        }
     }
-  }
-  // Add new
-  for (int i = 0; i < MAX_CALLS; i++) {
-    if (g_call_state.active_calls[i].call == NULL) {
-      g_call_state.active_calls[i].call = call;
-      g_call_state.active_calls[i].state = state;
-      if (peer)
-        safe_strncpy(g_call_state.active_calls[i].peer_uri, peer, 256);
-      else
-        g_call_state.active_calls[i].peer_uri[0] = '\0';
-      log_info("BaresipManager", "Added call %p to slot %d", call, i);
-      return;
+    
+    // Add new
+    for (int i=0; i<MAX_CALLS; i++) {
+        if (g_call_state.active_calls[i].call == NULL) {
+            g_call_state.active_calls[i].call = call;
+            g_call_state.active_calls[i].state = state;
+            if (peer) {
+                safe_strncpy(g_call_state.active_calls[i].peer_uri, peer, 256);
+            } else {
+                 g_call_state.active_calls[i].peer_uri[0] = '\0';
+            }
+            log_info("BaresipManager", "Added call %p to slot %d", call, i);
+            return;
+        }
     }
-  }
-  log_warn("BaresipManager", "Max calls reached, could not track call %p",
-           call);
+    log_warn("BaresipManager", "Max calls reached, could not track call %p", call);
 }
 
 static void remove_call(struct call *call) {
@@ -197,6 +257,7 @@ static account_status_t *find_account(const char *aor) {
 }
 
 // Add or update account status
+/* Unused function removed */
 static void update_account_status(const char *aor, reg_status_t status) {
   if (!aor)
     return;
@@ -221,6 +282,45 @@ static void update_account_status(const char *aor, reg_status_t status) {
 // Forward declarations
 extern const struct mod_export exports_sdl_vidisp;
 extern const struct mod_export exports_window;
+
+static void message_handler(struct ua *ua, const struct pl *peer, const struct pl *ctype,
+                            struct mbuf *body, void *arg) {
+    (void)ua;
+    (void)ctype;
+    (void)arg;
+
+    // Convert body to C-string
+    size_t len = mbuf_get_left(body);
+    if (len == 0) return;
+
+    char *text = mem_zalloc(len + 1, NULL);
+    if (!text) return;
+
+    mbuf_read_mem(body, (uint8_t*)text, len);
+    text[len] = '\0'; // Ensure null termination
+
+    // Get Peer URI string
+    char from_uri[256];
+    if (peer && peer->l > 0) {
+        snprintf(from_uri, sizeof(from_uri), "%.*s", (int)peer->l, peer->p);
+    } else {
+        snprintf(from_uri, sizeof(from_uri), "unknown");
+    }
+
+    log_info("BaresipManager", "RECEIVED MESSAGE from %s: %s", from_uri, text);
+
+    // Save to DB (Incoming = 0)
+    db_chat_add(from_uri, 0, text);
+
+    if (g_message_callback) {
+        g_message_callback(from_uri, text);
+    }
+
+    mem_deref(text);
+    
+    // Note: Baresip handles 200 OK automatically if handler returns (or earlier in the chain)
+}
+
 
 static void call_event_handler(struct ua *ua, enum ua_event ev, struct call *call, const char *prm,
                                void *arg) {
@@ -307,7 +407,7 @@ static void call_event_handler(struct ua *ua, enum ua_event ev, struct call *cal
           log_debug("BaresipManager", "SIPSESS_CONN: uag_find_msg failed. "
                                       "Attempting fuzzy match...");
           struct le *le;
-          for (le = uag_list()->head; le; le = le->next) {
+          for (le = ((struct list *)uag_list())->head; le; le = le->next) {
             struct ua *candidate_ua = le->data;
             struct account *acc = ua_account(candidate_ua);
             struct uri *acc_uri = account_luri(acc);
@@ -338,7 +438,7 @@ static void call_event_handler(struct ua *ua, enum ua_event ev, struct call *cal
       if (!g_call_state.current_call) {
         // Global search fallback
         struct le *le;
-        for (le = uag_list()->head; le; le = le->next) {
+        for (le = ((struct list *)uag_list())->head; le; le = le->next) {
           struct ua *u = le->data;
           struct call *c = ua_call(u);
           if (c) {
@@ -381,7 +481,7 @@ static void call_event_handler(struct ua *ua, enum ua_event ev, struct call *cal
     // logic to find call if NULL
     if (!g_call_state.current_call) {
       struct le *le;
-      for (le = uag_list()->head; le; le = le->next) {
+      for (le = ((struct list *)uag_list())->head; le; le = le->next) {
         struct ua *u = le->data;
         struct call *c = ua_call(u);
         if (c) {
@@ -823,7 +923,7 @@ static void create_default_config(const char *config_path) {
   if (f) {
     fprintf(f, "# Minimal Baresip Config\n"
                "poll_method\t\tpoll\n"
-               "sip_listen\t\t0.0.0.0:0\n"
+               "sip_listen\t\t0.0.0.0:5060\n"
                "sip_transports\t\tudp,tcp\n"
                "audio_path\t\t/usr/share/baresip\n"
                "# Modules\n"
@@ -878,7 +978,7 @@ static void create_default_config(const char *config_path) {
   }
 }
 
-static void patch_config_file(const char *config_path) {
+static void patch_config_file(const char *config_path, const app_config_t *app_conf) {
   char temp_path[1024];
   snprintf(temp_path, sizeof(temp_path), "%s.tmp", config_path);
 
@@ -909,6 +1009,11 @@ static void patch_config_file(const char *config_path) {
       log_info("BaresipManager",
                "Patched video_selfview to window (Matched line: %s)", line);
     }
+    // Correct SIP Listen Port if it was set to 0.0.0.0:0 (Random)
+    else if (strstr(line, "sip_listen") && strstr(line, "0.0.0.0:0")) {
+         fprintf(f_out, "sip_listen\t\t0.0.0.0:5060\n");
+         log_info("BaresipManager", "Patched sip_listen to 0.0.0.0:5060");
+    }
     // Check for keepalive
     else if (strstr(line, "sip_keepalive_interval")) {
       fprintf(f_out, "%s", line);
@@ -928,6 +1033,12 @@ static void patch_config_file(const char *config_path) {
     log_info("BaresipManager", "Appended sip_keepalive_interval config");
   }
 
+  // Ensure modules are loaded
+  fprintf(f_out, "module_load\t\tstun.so\n");
+  fprintf(f_out, "module_load\t\tturn.so\n"); 
+  fprintf(f_out, "module_load\t\tice.so\n");
+  fprintf(f_out, "module_load\t\tnatpmp.so\n");
+
   fclose(f_in);
   fclose(f_out);
 
@@ -939,53 +1050,10 @@ static void patch_config_file(const char *config_path) {
   }
 }
 
-static void create_default_accounts(void) {
-  char dir[256];
-  char path[512];
-  const char *home = getenv("HOME");
-  if (!home) home = "/root";
+/* Unused functions removed */
+    
+// Orphan code removed
 
-  snprintf(dir, sizeof(dir), "%s/.baresip-lvgl", home);
-  mkdir(dir, 0755);
-
-  snprintf(path, sizeof(path), "%s/accounts.conf", dir);
-  
-  // Do not overwrite existing configuration (User Request)
-  if (access(path, F_OK) == 0) {
-      printf("TEST_MATCH_MGR: accounts.conf exists, skipping default creation [NO_DEFAULT]\n");
-      return;
-  }
-
-  FILE *f = fopen(path, "w");
-  if (f) {
-    // Format: Display|User|Pass|Server|Port|Enabled|Realm|Proxy|Proxy2|AuthUser|Nick|RegInt|MediaEnc|MediaNat|RTCP|Prack|DTMF|Ans|VM|Audio|Video
-    // fprintf(f, "Fanvil|808089|12345|fanvil.com|5060|1|fanvil.com|sip:172.16.1.97:7060||808089||900||||||rtp|manual||opus/48000/2|H264\n");
-    // fprintf(f, "Fanvil|808089|12345|fanvil.com|5060|1|fanvil.com|sip:172.16.1.97:7060||808089||900||||||rtp|manual||opus/48000/2|H264\n");
-    // Enable Dummy Account for Testing (Pipe Format)
-    // Enable Dummy Account for Testing (Pipe Format)
-    // fprintf(f, "Test|test|pass|127.0.0.1|5060|1|127.0.0.1|||||0|||||||||\n");
-    // User requested NO default account in code.
-    fprintf(f, "# Accounts config created by baresip-lvgl\n");
-    fclose(f);
-    printf("TEST_MATCH_MGR: Created empty accounts.conf [NO_DEFAULT]\n");
-  } else {
-    printf("TEST_MATCH_MGR: Failed to create accounts.conf\n");
-  }
-
-  // Dump content for verification
-  f = fopen(path, "r");
-  if (f) {
-      char line[512];
-      printf("TEST_MATCH_MGR: --- dumping accounts.conf ---\n");
-      while (fgets(line, sizeof(line), f)) {
-          printf("TEST_MATCH_MGR: %s", line);
-      }
-      printf("TEST_MATCH_MGR: --- end of accounts.conf ---\n");
-      fclose(f);
-  } else {
-      printf("TEST_MATCH_MGR: Could not read back accounts.conf\n");
-  }
-}
 
 int baresip_manager_init(void) {
   static bool initialized = false;
@@ -1010,6 +1078,13 @@ int baresip_manager_init(void) {
   signal(SIGINT, signal_handler);
   signal(SIGTERM, signal_handler);
 
+  // --- Apply Application Settings Overrides ---
+  app_config_t app_conf;
+  if (config_load_app_settings(&app_conf) != 0) {
+      log_warn("BaresipManager", "Failed to load app settings (using defaults)");
+      memset(&app_conf, 0, sizeof(app_conf));
+  }
+ 
   // Create baresip configuration
   // Ensure .baresip directory exists
   char home_dir[256];
@@ -1041,7 +1116,7 @@ int baresip_manager_init(void) {
       create_default_config(config_path);
     }
     // 2. Patch config file (Robustly ensure selfview=sdl_vidisp and keepalive)
-    patch_config_file(config_path);
+    patch_config_file(config_path, &app_conf);
 
     log_info("BaresipManager", "Config dir: %s", home_dir);
   }
@@ -1065,16 +1140,21 @@ int baresip_manager_init(void) {
   }
   printf("BaresipManager: Config Loaded\n"); fflush(stdout);
 
-  // --- Apply Application Settings Overrides ---
-  app_config_t app_conf;
-  if (config_load_app_settings(&app_conf) == 0) {
+  // app_conf is already loaded above
+  if (1) {
     log_info("BaresipManager", "Applying App Settings Overrides...");
 
-    // 1. Listen Address (Start Automatically)
-    if (app_conf.start_automatically && strlen(app_conf.listen_address) > 0) {
+    // 1. Listen Address
+    if (strlen(app_conf.listen_address) > 0) {
       log_info("BaresipManager", "Override Listen Address: %s",
                app_conf.listen_address);
       safe_strncpy(cfg->sip.local, app_conf.listen_address, sizeof(cfg->sip.local));
+    } else {
+        // Enforce 5060 if config has 0 (random) or empty
+        if (strstr(cfg->sip.local, ":0") || strlen(cfg->sip.local) == 0) {
+             log_info("BaresipManager", "Enforcing Default Listen Port: 0.0.0.0:5060");
+             safe_strncpy(cfg->sip.local, "0.0.0.0:5060", sizeof(cfg->sip.local));
+        }
     }
 
     // 2. DNS Servers
@@ -1189,6 +1269,9 @@ int baresip_manager_init(void) {
   cfg->video.fps = 30;
   cfg->video.bitrate = 1000000;
 
+  // Enable SIP Trace
+  // cfg->sip.trace = true; // Error: No such member
+
   // Initialize Baresip core
   err = baresip_init(cfg);
   if (err) {
@@ -1212,9 +1295,10 @@ int baresip_manager_init(void) {
   if (err) log_warn("BaresipManager", "Failed to add window module: %d", err);
 
   // NAT modules (optional)
+  // STUN/TURN/ICE disabled due to linker errors (static modules not found)
   // mod_add(&m, &exports_stun);
   // mod_add(&m, &exports_turn);
-  // mod_add(&m, &exports_ice);
+  // mod_add(&m, &exports_ice); // Linker error: undefined reference
   
 
   
@@ -1261,7 +1345,20 @@ int baresip_manager_init(void) {
   printf("DEBUG: Post-net_debug\n"); fflush(stdout);
 
   // Register event handler
+  // Register event handler
   uag_event_register(call_event_handler, NULL);
+
+  // Initialize Messaging Subsystem
+  err = message_init(&g_message);
+  if (err) {
+      log_error("BaresipManager", "Failed to init messaging: %d", err);
+  } else {
+      // Listen for Messages
+      err = message_listen(g_message, message_handler, NULL);
+      if (err) {
+          log_warn("BaresipManager", "Message listen FAILED: %d", err);
+      }
+  }
 
   printf("DEBUG: Post-uag_event_register\n"); fflush(stdout);
 
@@ -1274,6 +1371,21 @@ int baresip_manager_init(void) {
   log_info("BaresipManager", "Initialization complete");
   log_info("BaresipManager", "Starting Call Watchdog...");
   tmr_start(&watchdog_tmr, 1000, check_call_watchdog, NULL);
+
+  // Sync Accounts
+  log_info("BaresipManager", "Syncing existing accounts...");
+  struct le *le;
+  for (le = ((struct list *)uag_list())->head; le; le = le->next) {
+       struct ua *ua = le->data;
+       struct account *acc = ua_account(ua);
+       const char *aor = account_aor(acc);
+       
+       // Check if already registered
+       reg_status_t status = ua_isregistered(ua) ? REG_STATUS_REGISTERED : REG_STATUS_NONE;
+       update_account_status(aor, status);
+       log_info("BaresipManager", "Synced Account: %s Status=%d", aor, status);
+  }
+
   return 0;
 }
 
@@ -1343,6 +1455,10 @@ void baresip_manager_set_reg_callback(reg_event_cb cb) {
   g_call_state.reg_callback = cb;
 }
 
+void baresip_manager_set_message_callback(message_event_cb cb) {
+    g_message_callback = cb;
+}
+
 reg_status_t baresip_manager_get_account_status(const char *aor) {
   if (!aor)
     return REG_STATUS_NONE;
@@ -1359,7 +1475,7 @@ static void check_call_watchdog(void *arg) {
 
     bool found = false;
     struct le *le;
-    for (le = uag_list()->head; le; le = le->next) {
+    for (le = ((struct list *)uag_list())->head; le; le = le->next) {
         struct ua *u = le->data;
         struct call *c = ua_call(u);
         if (c == g_call_state.current_call) {
@@ -1425,7 +1541,7 @@ int baresip_manager_connect(const char *uri, const char *account_aor, bool video
 
   // Check valid accounts
   struct le *le_debug;
-  for (le_debug = uag_list()->head; le_debug; le_debug = le_debug->next) {
+  for (le_debug = ((struct list *)uag_list())->head; le_debug; le_debug = le_debug->next) {
     struct ua *u = le_debug->data;
     (void)u;
 
@@ -1438,7 +1554,7 @@ int baresip_manager_connect(const char *uri, const char *account_aor, bool video
   }
 
   if (!ua) {
-    struct le *le = list_head(uag_list());
+    struct le *le = list_head(((struct list *)uag_list()));
     if (le)
       ua = le->data;
   }
@@ -1554,23 +1670,68 @@ int baresip_manager_account_register(const char *aor) {
   return ua_register(ua);
 }
 
+int baresip_manager_account_register_simple(const char *user, const char *domain) {
+    if (!user || !domain) return -1;
+    
+    struct list *l = (struct list *)uag_list();
+    struct le *le;
+    for (le = l->head; le; le = le->next) {
+        struct ua *ua = le->data;
+        struct account *acc = ua_account(ua);
+        const char *aor = account_aor(acc);
+        
+        // Check if AOR contains user and domain
+        if (strstr(aor, user) && strstr(aor, domain)) {
+             log_info("BaresipManager", "Found UA for simple register: %s", aor);
+             return ua_register(ua);
+        }
+    }
+    log_warn("BaresipManager", "No UA found for simple register: %s @ %s", user, domain);
+    return -1;
+}
+
+
 
 // Timer callback for command processing
-static struct tmr g_loop_tmr; // Restore missing timer definition
+// Timer callback for command processing
+// Timer callback for command processing
+static struct tmr g_loop_tmr;
 static void cmd_check_cb(void *arg) {
     (void)arg;
     
-    // Check pending commands
-    pthread_mutex_lock(&g_cmd_mutex);
-    if (g_pending_cmd.pending) {
-        printf("TEST_MATCH_MGR: Processing pending account add in main thread\n");
-        internal_add_account(&g_pending_cmd.acc);
-        g_pending_cmd.pending = false;
+    // Process ALL pending commands in queue
+    while (1) {
+        cmd_t cmd;
+        bool has_cmd = false;
+        
+        pthread_mutex_lock(&g_cmd_mutex);
+        if (g_cmd_queue.count > 0) {
+            cmd = g_cmd_queue.items[g_cmd_queue.head];
+            g_cmd_queue.head = (g_cmd_queue.head + 1) % CMD_QUEUE_SIZE;
+            g_cmd_queue.count--;
+            has_cmd = true;
+        }
+        pthread_mutex_unlock(&g_cmd_mutex);
+        
+        if (!has_cmd) break;
+        
+        // Execute Command
+        switch (cmd.type) {
+            case CMD_ADD_ACCOUNT:
+                log_info("BaresipManager", "Processing CMD_ADD_ACCOUNT");
+                internal_add_account(&cmd.data.acc);
+                break;
+            case CMD_SEND_MESSAGE:
+                log_info("BaresipManager", "Processing CMD_SEND_MESSAGE");
+                internal_send_message(cmd.data.msg.peer, cmd.data.msg.text);
+                break;
+            default:
+                break;
+        }
     }
-    pthread_mutex_unlock(&g_cmd_mutex);
     
     // Reschedule
-    tmr_start(&g_loop_tmr, 50, cmd_check_cb, NULL);
+    tmr_start(&g_loop_tmr, 20, cmd_check_cb, NULL);
 }
 
 // UI Timer
@@ -1649,19 +1810,26 @@ bool baresip_manager_is_muted(void) { return g_call_state.muted; }
 
 // Thread-safe wrapper
 int baresip_manager_add_account(const voip_account_t *acc) {
-    if (!acc) return EINVAL;
+    if (!acc) return -1;
     
-    pthread_mutex_lock(&g_cmd_mutex);
-    g_pending_cmd.acc = *acc;
-    g_pending_cmd.pending = true;
-    pthread_mutex_unlock(&g_cmd_mutex);
-    printf("TEST_MATCH_MGR: Queued account add request [THREAD_FIX]\n");
-    return 0;
+    cmd_t cmd;
+    memset(&cmd, 0, sizeof(cmd));
+    cmd.type = CMD_ADD_ACCOUNT;
+    cmd.data.acc = *acc;
+    
+    // We cannot easily check if queue is full and return error synchronously that means "try again".
+    // But for now, we log error.
+    if (!cmd_enqueue(&cmd)) {
+        log_error("BaresipManager", "Command Queue Full! Failed to enqueue account add.");
+        return -1;
+    }
+    
+    return 0; // Success (Pending)
 }
 
 // Internal function (runs in Baresip Thread)
 static int internal_add_account(const voip_account_t *acc) {
-  char aor[1024];
+  char aor[2048];
   int err;
 
   if (!acc)
@@ -1673,7 +1841,12 @@ static int internal_add_account(const voip_account_t *acc) {
   /* Simplified for now: <sip:user:password@domain>;transport=tcp */
 
 
-  char transport_param[32] = ";transport=udp"; // Explicitly set to UDP per user request
+  char transport_param[32];
+  if (strlen(acc->transport) > 0) {
+      snprintf(transport_param, sizeof(transport_param), ";transport=%s", acc->transport);
+  } else {
+      strcpy(transport_param, ";transport=udp");
+  }
 
 
   // Handle Custom Port
@@ -1683,6 +1856,31 @@ static int internal_add_account(const voip_account_t *acc) {
              acc->port);
   } else {
     snprintf(server_with_port, sizeof(server_with_port), "%s", acc->server);
+  }
+  
+  // Prepare Media NAT Parameter
+  char mnat_param[256] = ""; // Increased size
+  
+  if (acc->use_ice) {
+      strcat(mnat_param, ";mnat=ice");
+  }
+
+  if (strlen(acc->stun_server) > 0) {
+      // Check if it's TURN or STUN
+      if (strncmp(acc->stun_server, "turn:", 5) == 0) {
+          char buf[128];
+          snprintf(buf, sizeof(buf), ";outbound=\"%s\"", acc->stun_server); // Quote for safety
+          strcat(mnat_param, buf);
+      } else {
+          // Assume STUN
+          // Baresip AOR parameter for STUN server override is not standard
+          // but we can try adding it as a custom parameter or rely on global.
+          // However, user asked to use it.
+          // Let's try adding it as ;stunserver=<uri>
+          char buf[128];
+          snprintf(buf, sizeof(buf), ";stunserver=\"%s\"", acc->stun_server);
+          strcat(mnat_param, buf);
+      }
   }
 
   if (strlen(acc->outbound_proxy) > 0) {
@@ -1701,18 +1899,18 @@ static int internal_add_account(const voip_account_t *acc) {
         (strlen(acc->auth_user) > 0) ? acc->auth_user : acc->username;
 
     snprintf(aor, sizeof(aor),
-             "<sip:%s@%s%s>;auth_pass=%s;auth_user=%s;outbound=%s;regint=600",
+             "<sip:%s@%s%s>;auth_pass=%s;auth_user=%s;outbound=%s;regint=%d%s",
              acc->username, server_with_port, transport_param, acc->password,
-             a_user, proxy_buf);
+             a_user, proxy_buf, acc->reg_interval, mnat_param);
   } else {
     // Direct Registration
-    snprintf(aor, sizeof(aor), "<sip:%s:%s@%s%s>;regint=3600", acc->username,
-             acc->password, server_with_port, transport_param);
+    snprintf(aor, sizeof(aor), "<sip:%s:%s@%s%s>;regint=%d%s", acc->username,
+             acc->password, server_with_port, transport_param, acc->reg_interval, mnat_param);
   }
 
   // Add display name if present
   if (strlen(acc->display_name) > 0) {
-    char temp[1024];
+    char temp[4096];
     snprintf(temp, sizeof(temp), "\"%s\" %s", acc->display_name, aor);
     strcpy(aor, temp);
   }
@@ -1727,11 +1925,16 @@ static int internal_add_account(const voip_account_t *acc) {
   }
 
   // Auto-register
+  // Auto-register
   if (ua) {
+     log_info("BaresipManager", "UA Allocated. Enabled: %d", acc->enabled);
     if (acc->enabled) {
+      log_info("BaresipManager", "Triggering Registration for %s", aor);
       err = ua_register(ua);
       if (err) {
         log_warn("BaresipManager", "Failed to register UA: %d", err);
+      } else {
+        log_info("BaresipManager", "Registration triggered successfully");
       }
     }
 
@@ -1866,10 +2069,10 @@ void baresip_manager_set_log_level(int level) {
 
   // Map App Log Level -> Baresip Log Level
   switch (level) {
-  case LOG_LEVEL_TRACE: // Assumes LOG_LEVEL_* are defined in logger.h
-    b_level = LEVEL_DEBUG;
-    dbg_level = DBG_DEBUG; // 7
-    break;
+  //case LOG_LEVEL_TRACE: // Assumes LOG_LEVEL_* are defined in logger.h
+  //  b_level = LEVEL_DEBUG;
+  //  dbg_level = DBG_DEBUG; // 7
+  //  break;
   case LOG_LEVEL_DEBUG:
     b_level = LEVEL_DEBUG;
     dbg_level = DBG_DEBUG; // 7
@@ -1883,7 +2086,7 @@ void baresip_manager_set_log_level(int level) {
     dbg_level = DBG_WARNING; // 4
     break;
   case LOG_LEVEL_ERROR:
-  case LOG_LEVEL_FATAL:
+  //case LOG_LEVEL_FATAL:
     b_level = LEVEL_ERROR;
     dbg_level = DBG_ERR; // 3
     break;
@@ -1943,7 +2146,7 @@ void baresip_manager_get_peer_display_name(struct call *call, const char *peer_u
        }
     } else {
         // Fallback for decode fail
-         strncpy(user, peer_uri, sizeof(user)-1);
+         snprintf(user, sizeof(user), "%s", peer_uri);
     }
 
     // 2. Try Display Name
@@ -1977,3 +2180,106 @@ void baresip_manager_get_current_call_display_name(char *out_buf, size_t size) {
 }
 
 
+
+// Internal function (runs on Baresip Thread)
+static int internal_send_message(const char *peer_uri, const char *text) {
+    log_info("BaresipManager", "internal_send_message: START peer='%s'", peer_uri);
+    
+    struct ua *ua = NULL;
+    struct list *l = (struct list *)uag_list();
+    if (l && l->head) {
+        ua = l->head->data;
+    }
+    
+    if (!ua) {
+        log_warn("BaresipManager", "No UA available to send message");
+        return -1;
+    }
+    log_info("BaresipManager", "internal_send_message: UA found: %p", ua);
+
+    // Format URI
+    char final_uri[512];
+    if (strchr(peer_uri, '@')) {
+        log_info("BaresipManager", "internal_send_message: Using full URI");
+        const char *p = peer_uri;
+        if (strncmp(p, "sip:", 4) != 0 && strncmp(p, "sips:", 5) != 0) {
+             snprintf(final_uri, sizeof(final_uri), "sip:%s", peer_uri);
+        } else {
+             safe_strncpy(final_uri, peer_uri, sizeof(final_uri));
+        }
+    } else {
+        log_info("BaresipManager", "internal_send_message: Appending domain");
+        // Append domain from UA
+        struct account *acc = ua_account(ua);
+        if (!acc) {
+             log_error("BaresipManager", "internal_send_message: UA has no account!");
+             return -1;
+        }
+        const char *aor = account_aor(acc);
+        log_info("BaresipManager", "internal_send_message: AOR='%s'", aor);
+        
+        char domain[128];
+        domain[0] = '\0';
+        
+        const char *at = strchr(aor, '@');
+        if (at) {
+             const char *semi = strchr(at, ';');
+             size_t len = semi ? (size_t)(semi - (at + 1)) : strlen(at + 1);
+             if (len >= sizeof(domain)) len = sizeof(domain) - 1;
+             snprintf(domain, sizeof(domain), "%.*s", (int)len, at + 1);
+             domain[len] = '\0';
+        }
+
+        if (strlen(domain) > 0) {
+             snprintf(final_uri, sizeof(final_uri), "sip:%s@%s", peer_uri, domain);
+        } else {
+             snprintf(final_uri, sizeof(final_uri), "sip:%s", peer_uri);
+        }
+    }
+
+    log_info("BaresipManager", "internal_send_message: Final URI='%s'", final_uri);
+    log_info("BaresipManager", "Sending MESSAGE... text len=%zu", strlen(text));
+    
+    printf("DEBUG_STEP: internal_send_message: Calling message_send...\n"); fflush(stdout);
+    // message_send takes (ua, peer, msg, resp_handler, arg)
+    int err = message_send(ua, final_uri, text, NULL, NULL);
+    printf("DEBUG_STEP: internal_send_message: message_send returned: %d\n", err); fflush(stdout);
+
+    if (err) {
+        log_error("BaresipManager", "Failed to send message: %d", err);
+        return err;
+    }
+    
+    log_info("BaresipManager", "internal_send_message: Message sent successfully. Saving to DB...");
+    printf("DEBUG_STEP: internal_send_message: Calling db_chat_add...\n"); fflush(stdout);
+    db_chat_add(final_uri, 1, text);
+    printf("DEBUG_STEP: internal_send_message: db_chat_add returned.\n"); fflush(stdout);
+
+    log_info("BaresipManager", "internal_send_message: Saved to DB. DONE.");
+    return 0;
+}
+
+// Public API (runs on Main Thread)
+int baresip_manager_send_message(const char *peer_uri, const char *text) {
+    if (!peer_uri) {
+        log_error("BaresipManager", "send_message: peer_uri is NULL");
+        return -1;
+    }
+    if (!text) {
+        log_error("BaresipManager", "send_message: text is NULL");
+        return -1;
+    }
+    log_info("BaresipManager", "enqueue message to='%s' text='%s'", peer_uri, text);
+
+    cmd_t cmd;
+    memset(&cmd, 0, sizeof(cmd));
+    cmd.type = CMD_SEND_MESSAGE;
+    safe_strncpy(cmd.data.msg.peer, peer_uri, sizeof(cmd.data.msg.peer));
+    safe_strncpy(cmd.data.msg.text, text, sizeof(cmd.data.msg.text));
+    
+    if (!cmd_enqueue(&cmd)) {
+        log_error("BaresipManager", "Command Queue Full! Failed to enqueue message.");
+        return -1;
+    }
+    return 0;
+}

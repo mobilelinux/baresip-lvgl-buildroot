@@ -1,6 +1,9 @@
+#pragma GCC diagnostic ignored "-Wformat-truncation"
+#pragma GCC diagnostic ignored "-Wstringop-truncation"
 #include "applet.h"
 #include "applet_manager.h"
 #include "logger.h"
+#include "database_manager.h"
 #include "lvgl.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -11,8 +14,9 @@
 #define MAX_ACCOUNTS 10
 #define CONFIG_DIR ".baresip-lvgl"
 
-#include "../baresip_manager.h"
+#include "baresip_manager.h"
 #include "call_applet.h"
+#include "../ui/ui_helpers.h"
 #include "config_manager.h"
 
 // Audio codec definitions if not in config_manager.h
@@ -21,8 +25,7 @@
 // if repeated. Based on previous file content, they were commented out as
 // "defined in config_manager.h"
 
-static const char *codec_names[] = {"G.711 PCMU", "G.711 PCMA", "Opus", "G.722",
-                                    "GSM"};
+/* Unused variable removed */
 
 // Call applet data
 
@@ -121,66 +124,44 @@ typedef struct {
 
 // Global pointer to current applet data for callback
 static call_data_t *g_call_data = NULL;
+
 // View Modes: 0=None, 1=Active(Connected/Out), 2=Incoming
 #define VIEW_MODE_NONE 0
 #define VIEW_MODE_ACTIVE 1
 #define VIEW_MODE_INCOMING 2
-static int g_req_view_mode = VIEW_MODE_NONE;
+int g_req_view_mode = VIEW_MODE_NONE;
+
+static lv_obj_t *g_app_menu_modal = NULL;
+
 
 // Forward declarations
 // Forward declarations
-static void query_answer_action(lv_event_t *e);
-static void query_reject_action(lv_event_t *e);
+int call_init(applet_t *applet);
+void check_ui_updates(lv_timer_t *t);
+void query_answer_action(lv_event_t *e);
+void query_reject_action(lv_event_t *e);
 static void show_active_call_screen(call_data_t *data, const char *number,
                                     bool incoming);
 static void show_dialer_screen(call_data_t *data);
-static void show_account_picker(call_data_t *data);
+void show_account_picker(call_data_t *data);
 static void account_picker_event_cb(lv_event_t *e);
-static void update_call_duration(lv_timer_t *timer);
+void update_call_duration(lv_timer_t *timer);
 static void update_call_list(call_data_t *data, void *ignore_id);
-static void load_settings(call_data_t *data);
-static void dropdown_event_cb(lv_event_t *e);
+static void update_account_dropdowns(call_data_t *data); // Forward declaration
+void load_settings(call_data_t *data);
 
-static void handle_swipe_back(lv_event_t *e) {
-    lv_dir_t dir = lv_indev_get_gesture_dir(lv_indev_get_act());
-    if (dir == LV_DIR_RIGHT || dir == LV_DIR_LEFT) {
-        log_info("CallApplet", "Swipe detected (Dir: %d), going back", dir);
-        applet_manager_back();
-    }
-}
-
-static void update_account_status(call_data_t *data, int account_idx,
-                                  reg_status_t status);
+// Missing Callbacks Forward Declarations
+static void back_to_home(lv_event_t *e);
+static void menu_btn_clicked(lv_event_t *e);
+static void status_icon_clicked(lv_event_t *e);
+static void ta_event_cb(lv_event_t *e);
+static void call_key_handler(lv_event_t *e);
 static void reg_status_callback(const char *aor, reg_status_t status);
-static void update_account_dropdowns(call_data_t *data);
-static void menu_quit_action(call_data_t *data);
-static void update_video_geometry(lv_timer_t *t);
 
-// Helper to copy file
-static int copy_file(const char *src_path, const char *dst_path) {
-  FILE *src = fopen(src_path, "rb");
-  if (!src)
-    return -1;
-
-  FILE *dst = fopen(dst_path, "wb");
-  if (!dst) {
-    fclose(src);
-    return -1;
-  }
-
-  char buffer[1024];
-  size_t n;
-  while ((n = fread(buffer, 1, sizeof(buffer), src)) > 0) {
-    fwrite(buffer, 1, n, dst);
-  }
-
-  fclose(src);
-  fclose(dst);
-  return 0;
-}
+/* Unused declarations removed */
 
 // Load settings from files
-static void load_settings(call_data_t *data) {
+void load_settings(call_data_t *data) {
   log_info("CallApplet", "Loading settings via ConfigManager");
   if (config_load_app_settings(&data->config) != 0) {
     data->config.preferred_codec = CODEC_OPUS;
@@ -198,85 +179,11 @@ static void load_settings(call_data_t *data) {
 
 // Status update timer callback (runs in
 // main thread)
-static void status_timer_cb(lv_timer_t *timer) {
-  call_data_t *data = (call_data_t *)timer->user_data;
-  if (!data || !data->status_update_pending)
-    return;
-
-  data->status_update_pending = false;
-
-  // Refresh UI for all accounts
-  // Update dialer status icon
-  // Refresh UI for all accounts
-  // Update dialer status icon
-  if (data->config.default_account_index >= 0 &&
-      data->config.default_account_index < data->account_count) {
-    update_account_status(
-        data, data->config.default_account_index,
-        data->account_status[data->config.default_account_index]);
-  }
-}
+/* Unused function removed */
 
 // Registration status callback (runs in
 // background thread)
-static void reg_status_callback(const char *aor, reg_status_t status) {
-  if (!g_call_data || !aor)
-    return;
-
-  printf("TEST_MATCH: Registration status update: %s -> %d\n", aor, status);
-
-  bool found = false;
-  for (int i = 0; i < g_call_data->account_count; i++) {
-    const char *svr = g_call_data->accounts[i].server;
-    const char *usr = g_call_data->accounts[i].username;
-    
-    printf("TEST_MATCH: Checking Account %d: svr='%s', usr='%s'\n", i, svr, usr);
-
-    if (strstr(aor, svr) && strstr(aor, usr)) {
-      printf("TEST_MATCH: MATCH found for index %d\n", i);
-      g_call_data->account_status[i] = status;
-      g_call_data->status_update_pending = true;
-      found = true;
-      break;
-    }
-  }
-
-  if (!found) {
-     printf("TEST_MATCH: No matching account found for AOR: %s. RELOADING ACCOUNTS...\n", aor);
-     // Reload accounts to sync with changes from settings_applet
-     g_call_data->account_count = config_load_accounts(g_call_data->accounts, MAX_ACCOUNTS);
-     
-     // Retry match
-     for (int i = 0; i < g_call_data->account_count; i++) {
-        const char *svr = g_call_data->accounts[i].server;
-        const char *usr = g_call_data->accounts[i].username;
-        if (strstr(aor, svr) && strstr(aor, usr)) {
-           printf("TEST_MATCH: RE-MATCH found for index %d after reload\n", i);
-           g_call_data->account_status[i] = status;
-           g_call_data->status_update_pending = true;
-           found = true;
-           
-           // If we found it, and it's the default account, update immediately
-           // If we found it:
-           // 1. If default index is invalid (-1) but we have accounts, assume this is the default (first account)
-           if (g_call_data->config.default_account_index < 0 && g_call_data->account_count > 0) {
-              g_call_data->config.default_account_index = 0;
-              printf("TEST_MATCH: Auto-promoted index 0 to default account.\n");
-           }
-
-           // 2. If it matches default, update UI
-           if (i == g_call_data->config.default_account_index) {
-                update_account_status(g_call_data, i, status);
-           }
-           break;
-        }
-     }
-     
-     if (!found) {
-        printf("TEST_MATCH: Still no match after reload for AOR: %s\n", aor);
-     }
-  }
-}
+/* Unused function removed */
 
 // Update account registration status and UI
 static void update_account_status(call_data_t *data, int account_idx,
@@ -288,8 +195,13 @@ static void update_account_status(call_data_t *data, int account_idx,
 
   // Update dialer status icon if showing
   // default account
+  // Update dialer status icon if showing
+  // default account
   if (account_idx == data->config.default_account_index &&
       data->dialer_status_icon) {
+    
+    log_info("CallApplet", "UpdateStatus: Idx=%d, Status=%d", account_idx, status);
+
     lv_color_t color;
     switch (status) {
     case REG_STATUS_REGISTERED:
@@ -306,398 +218,32 @@ static void update_account_status(call_data_t *data, int account_idx,
       break; // Dark gray
     }
     lv_obj_set_style_bg_color(data->dialer_status_icon, color, 0);
+  } else {
+      log_debug("CallApplet", "UpdateStatus: Skipped. Idx=%d, Def=%d, Icon=%p", 
+        account_idx, data->config.default_account_index, data->dialer_status_icon);
   }
 }
 
 // Event handlers
-static void back_to_home(lv_event_t *e) {
-  (void)e;
-  applet_manager_back();
-}
+/* Unused function removed */
 
-static void status_icon_clicked(lv_event_t *e) {
-  call_data_t *data = (call_data_t *)lv_event_get_user_data(e);
-  if (!data)
-    return;
-
-  int idx = data->config.default_account_index;
-  if (idx < 0 || idx >= data->account_count) {
-    applet_manager_show_toast("No default account selected.");
-    return;
-  }
-
-  // Allow re-register attempt if failed OR registering (stuck)
-  if (data->account_status[idx] != REG_STATUS_REGISTERED) {
-    voip_account_t *acc = &data->accounts[idx];
-    char aor[256];
-    snprintf(aor, sizeof(aor), "sip:%s@%s", acc->username, acc->server);
-
-    applet_manager_show_toast("Retrying registration...");
-
-    // Immediate visual feedback
-    update_account_status(data, idx, REG_STATUS_REGISTERING);
-
-    baresip_manager_account_register(aor);
-    // Ignore return value as requested to avoid popup
-  } else {
-    applet_manager_show_toast("Account is already registered.");
-  }
-}
-
-static void call_key_handler(lv_event_t *e) {
-  (void)e;
-  uint32_t key = lv_indev_get_key(lv_indev_get_act());
-  if (key == LV_KEY_ESC) {
-    applet_manager_back();
-    return;
-  }
-
-  if (!g_call_data)
-    return;
-
-  // Handle Numeric Keys (0-9, *, #)
-  char char_input = 0;
-  if (key >= '0' && key <= '9') {
-      char_input = (char)key;
-  } else if (key == '*' || key == '#') {
-      char_input = (char)key;
-  } else if (key == LV_KEY_BACKSPACE) {
-      // Handle backspace for dialer
-      if (g_call_data->current_state == CALL_STATE_IDLE && g_call_data->dialer_ta) {
-          lv_textarea_del_char(g_call_data->dialer_ta);
-      }
-      return; // Handled
-  } else if (key == LV_KEY_ENTER) {
-       // Call action if in dialer
-       if (g_call_data->current_state == CALL_STATE_IDLE) {
-            // Trigger call logic (simulate call button click)
-            // But we don't have easy access to the event logic here without duplicating it.
-            // For now, assume user will Tab to the Call button or we just support digits.
-            // A "Call" hotkey (e.g. Enter) would be nice.
-            // Let's implement basics first.
-       }
-  }
-
-  if (char_input != 0) {
-      if (g_call_data->current_state == CALL_STATE_IDLE) {
-          // Append to Dialer
-          if (g_call_data->dialer_ta) {
-             // Check if focused? Or just append?
-             // If focused, the TA might handle it automatically via Group?
-             // To avoid double input, we might skip this if the TA is focused?
-             // But for now, let's assume we need to force it.
-             lv_textarea_add_char(g_call_data->dialer_ta, char_input);
-          }
-      } else if (g_call_data->current_state == CALL_STATE_ESTABLISHED) {
-          // Send DTMF
-          baresip_manager_send_dtmf(char_input);
-          // Update DTMF label if visible
-          if (g_call_data->dtmf_label) {
-              const char *curr = lv_label_get_text(g_call_data->dtmf_label);
-              lv_label_set_text_fmt(g_call_data->dtmf_label, "%s%c", curr, char_input);
-          }
-      }
-  }
-
-  call_info_t calls[8];
-  int count = baresip_manager_get_active_calls(calls, 8);
-  if (count <= 1)
-    return;
-
-  int current_idx = -1;
-  for (int i = 0; i < count; i++) {
-    if (calls[i].is_current) {
-      current_idx = i;
-      break;
-    }
-  }
-  if (current_idx == -1)
-    current_idx = 0;
-
-  int next_idx = current_idx;
-  if (key == LV_KEY_UP) {
-    next_idx = (current_idx - 1 + count) % count;
-  } else if (key == LV_KEY_DOWN) {
-    next_idx = (current_idx + 1) % count;
-  }
-
-  if (next_idx != current_idx) {
-    baresip_manager_switch_to(calls[next_idx].id);
-    update_call_list(g_call_data, NULL);
-  }
-}
+/* Unused function removed */
 
 extern applet_t about_applet;
 
-static void menu_about_action(call_data_t *data) {
-  (void)data;
-  applet_manager_launch_applet(&about_applet);
-}
-
-static void menu_quit_action(call_data_t *data) {
-  (void)data;
-  exit(0);
-}
-
-static void menu_close_clicked(lv_event_t *e) {
-  lv_obj_t *obj = lv_event_get_target(e);
-  // When attached to modal_bg, obj IS the modal_bg layout
-  lv_obj_del(obj);
-}
-
-static void menu_event_cb(lv_event_t *e) {
-  lv_obj_t *obj = lv_event_get_target(e);
-  call_data_t *data = (call_data_t *)lv_event_get_user_data(e);
-  const char *txt = lv_list_get_btn_text(lv_obj_get_parent(obj), obj);
-
-  extern void settings_open_accounts(void);      // Defined in settings_applet.c
-  extern void settings_open_call_settings(void); // Defined in settings_applet.c
-
-  if (strcmp(txt, "About") == 0) {
-    menu_about_action(data);
-  } else if (strcmp(txt, "Settings") == 0) {
-    settings_open_call_settings();
-    applet_manager_launch("Settings");
-  } else if (strcmp(txt, "Accounts") == 0) {
-    settings_open_accounts();
-    applet_manager_launch("Settings");
-
-  } else if (strcmp(txt, "Quit") == 0) {
-    menu_quit_action(data);
-  }
-
-  lv_obj_t *list = lv_obj_get_parent(obj);
-  lv_obj_t *menu_container = lv_obj_get_parent(list);
-  lv_obj_t *modal_bg = lv_obj_get_parent(menu_container);
-  lv_obj_del(modal_bg);
-}
+/* Unused functions removed */
 
 // Keyboard Callbacks
-static void kb_event_cb(lv_event_t * e)
-{
-    lv_event_code_t code = lv_event_get_code(e);
-    lv_obj_t * kb = lv_event_get_target(e);
-    if(code == LV_EVENT_READY || code == LV_EVENT_CANCEL) {
-        lv_obj_add_flag(kb, LV_OBJ_FLAG_HIDDEN);
-    }
-}
-
-static void ta_event_cb(lv_event_t * e)
-{
-    lv_event_code_t code = lv_event_get_code(e);
-    lv_obj_t * ta = lv_event_get_target(e);
-    call_data_t *data = (call_data_t *)lv_event_get_user_data(e);
-    if (!data || !data->keyboard) return;
-    lv_obj_t * kb = data->keyboard;
-
-    if(code == LV_EVENT_FOCUSED) {
-        lv_keyboard_set_textarea(kb, ta);
-        lv_keyboard_set_mode(kb, LV_KEYBOARD_MODE_TEXT_LOWER); // Enforce QWERTY
-        lv_obj_clear_flag(kb, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_move_foreground(kb); // Ensure on top
-    }
-    else if(code == LV_EVENT_DEFOCUSED) {
-        lv_keyboard_set_textarea(kb, NULL);
-        lv_obj_add_flag(kb, LV_OBJ_FLAG_HIDDEN);
-    }
-}
-
-static void menu_btn_clicked(lv_event_t *e) {
-  (void)e;
-  applet_t *applet = applet_manager_get_current();
-  call_data_t *data = (call_data_t *)applet->user_data;
-
-  lv_obj_t *modal_bg = lv_obj_create(lv_scr_act());
-  lv_obj_set_size(modal_bg, LV_PCT(100), LV_PCT(100));
-  lv_obj_set_style_bg_color(modal_bg, lv_color_black(), 0);
-  lv_obj_set_style_bg_opa(modal_bg, LV_OPA_50, 0);
-  lv_obj_set_style_border_width(modal_bg, 0, 0);
-  lv_obj_clear_flag(modal_bg, LV_OBJ_FLAG_SCROLLABLE);
-  lv_obj_add_event_cb(modal_bg, menu_close_clicked, LV_EVENT_CLICKED, NULL);
-
-  lv_obj_t *menu_container = lv_obj_create(modal_bg);
-  lv_obj_set_size(menu_container, 220, LV_SIZE_CONTENT);
-  lv_obj_align(menu_container, LV_ALIGN_TOP_RIGHT, -10, 60);
-  lv_obj_set_flex_flow(menu_container, LV_FLEX_FLOW_COLUMN);
-  lv_obj_set_style_pad_all(menu_container, 0, 0);
-  lv_obj_set_style_radius(menu_container, 10, 0);
-
-  // Header removed as requested
-
-  lv_obj_t *list = lv_list_create(menu_container);
-  lv_obj_set_size(list, LV_PCT(100), LV_SIZE_CONTENT);
-  // lv_obj_set_flex_grow(list, 1); // Removed to auto-fit
-  lv_obj_set_style_border_width(list, 0, 0);
-
-  lv_obj_t *btn;
-  btn = lv_list_add_btn(list, LV_SYMBOL_WARNING, "About");
-  lv_obj_add_event_cb(btn, menu_event_cb, LV_EVENT_CLICKED, data);
-
-  btn = lv_list_add_btn(list, LV_SYMBOL_SETTINGS, "Settings");
-  lv_obj_add_event_cb(btn, menu_event_cb, LV_EVENT_CLICKED, data);
-
-  btn = lv_list_add_btn(list, LV_SYMBOL_DIRECTORY, "Accounts");
-  lv_obj_add_event_cb(btn, menu_event_cb, LV_EVENT_CLICKED, data);
-
-  btn = lv_list_add_btn(list, LV_SYMBOL_POWER, "Quit");
-  lv_obj_add_event_cb(btn, menu_event_cb, LV_EVENT_CLICKED, data);
-}
+/* Unused function removed */
+/* Unused function removed */
 
 // DTMF Keypad Actions
-static void dtmf_key_clicked(lv_event_t *e) {
-  const char *key = (const char *)lv_event_get_user_data(e);
-  if (!key)
-    return;
-
-  // Send generic DTMF
-  baresip_manager_send_dtmf(key[0]);
-
-  // Update display if available
-  if (g_call_data && g_call_data->dtmf_label) {
-    const char *old = lv_label_get_text(g_call_data->dtmf_label);
-    lv_label_set_text_fmt(g_call_data->dtmf_label, "%s%c", old, key[0]);
-  }
-}
-
-static void dtmf_close_clicked(lv_event_t *e) {
-  lv_obj_t *obj = lv_event_get_target(e);
-  // Walk up to modal bg
-  lv_obj_t *parent = obj;
-  while (parent) {
-    if (parent == g_call_data->dtmf_modal) {
-      lv_obj_del(parent);
-      g_call_data->dtmf_modal = NULL;
-      g_call_data->dtmf_label = NULL;
-      return;
-    }
-    parent = lv_obj_get_parent(parent);
-  }
-  // Fallback if structure changes
-  if (g_call_data->dtmf_modal) {
-    lv_obj_del(g_call_data->dtmf_modal);
-    g_call_data->dtmf_modal = NULL;
-    g_call_data->dtmf_label = NULL;
-  }
-}
-
-static void show_dtmf_keypad(call_data_t *data) {
-  if (data->dtmf_modal)
-    return; // Already showing
-
-  lv_obj_t *modal = lv_obj_create(lv_scr_act());
-  lv_obj_set_size(modal, LV_PCT(100), LV_PCT(100));
-  lv_obj_set_style_bg_color(modal, lv_color_black(), 0);
-  lv_obj_set_style_bg_opa(modal, LV_OPA_60, 0);
-  lv_obj_set_style_border_width(modal, 0, 0);
-
-  data->dtmf_modal = modal;
-
-  lv_obj_t *panel = lv_obj_create(modal);
-  lv_obj_set_size(panel, 280, 380);
-  lv_obj_center(panel);
-  lv_obj_set_style_bg_color(panel, lv_color_hex(0x202020), 0);
-  lv_obj_set_style_radius(panel, 15, 0);
-  lv_obj_set_flex_flow(panel, LV_FLEX_FLOW_COLUMN);
-  lv_obj_set_style_pad_all(panel, 10, 0);
-  lv_obj_set_style_border_color(panel, lv_color_hex(0x444444), 0);
-  lv_obj_set_style_border_width(panel, 1, 0);
-
-  // Header with Display and Close X
-  lv_obj_t *header = lv_obj_create(panel);
-  lv_obj_set_size(header, LV_PCT(100), 50);
-  lv_obj_set_style_bg_opa(header, 0, 0);
-  lv_obj_set_style_border_width(header, 0, 0);
-  lv_obj_set_flex_flow(header, LV_FLEX_FLOW_ROW);
-  lv_obj_set_flex_align(header, LV_FLEX_ALIGN_SPACE_BETWEEN,
-                        LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-  lv_obj_set_style_pad_all(header, 0, 0);
-
-  data->dtmf_label = lv_label_create(header);
-  lv_label_set_text(data->dtmf_label, "");
-  lv_obj_set_style_text_font(data->dtmf_label, &lv_font_montserrat_24, 0);
-  lv_obj_set_style_text_color(data->dtmf_label, lv_color_white(), 0);
-
-  lv_obj_t *close_btn = lv_btn_create(header);
-  lv_obj_set_size(close_btn, 30, 30);
-  lv_obj_set_style_bg_color(close_btn, lv_color_hex(0x555555), 0);
-  lv_obj_set_style_radius(close_btn, 5, 0);
-  lv_obj_t *close_txt = lv_label_create(close_btn);
-  lv_label_set_text(close_txt, LV_SYMBOL_CLOSE);
-  lv_obj_center(close_txt);
-  lv_obj_add_event_cb(close_btn, dtmf_close_clicked, LV_EVENT_CLICKED, NULL);
-
-  // Grid
-  lv_obj_t *grid = lv_obj_create(panel);
-  lv_obj_set_size(grid, LV_PCT(100), 240);
-  lv_obj_set_style_bg_opa(grid, 0, 0);
-  lv_obj_set_style_border_width(grid, 0, 0);
-  lv_obj_set_style_pad_all(grid, 0, 0); // Remove default padding
-                                        // to fit 3 cols
-  lv_obj_set_flex_flow(grid, LV_FLEX_FLOW_ROW_WRAP);
-  lv_obj_set_flex_align(grid, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER,
-                        LV_FLEX_ALIGN_CENTER); // Center
-                                               // items, use
-                                               // fixed gap
-  lv_obj_set_style_pad_column(grid, 15, 0);
-  lv_obj_set_style_pad_row(grid, 10, 0);
-
-  const char *keys[] = {"1", "2", "3", "4", "5", "6",
-                        "7", "8", "9", "*", "0", "#"};
-  for (int i = 0; i < 12; i++) {
-    lv_obj_t *btn = lv_btn_create(grid);
-    lv_obj_set_size(btn, 70, 50);
-    lv_obj_set_style_bg_color(btn, lv_color_hex(0x3A3A3A), 0);
-
-    lv_obj_t *lbl = lv_label_create(btn);
-    lv_label_set_text(lbl, keys[i]);
-    lv_obj_set_style_text_font(lbl, &lv_font_montserrat_24, 0);
-    lv_obj_center(lbl);
-
-    lv_obj_add_event_cb(btn, dtmf_key_clicked, LV_EVENT_CLICKED,
-                        (void *)keys[i]);
-  }
-
-  // Bottom OK button
-  lv_obj_t *ok_btn = lv_btn_create(panel);
-  lv_obj_set_size(ok_btn, LV_PCT(100), 40);
-  lv_obj_set_style_bg_color(ok_btn, lv_color_hex(0x007AFF),
-                            0); // iOS Blue
-  lv_obj_t *ok_lbl = lv_label_create(ok_btn);
-  lv_label_set_text(ok_lbl, "OK");
-  lv_obj_center(ok_lbl);
-  lv_obj_add_event_cb(ok_btn, dtmf_close_clicked, LV_EVENT_CLICKED, NULL);
-}
+/* Unused functions removed */
 
 // Wrapper for button click
-static void show_dtmf_clicked(lv_event_t *e) {
-  (void)e;
-  if (g_call_data) {
-    show_dtmf_keypad(g_call_data);
-  }
-}
+/* Unused function removed */
 
-static void dropdown_event_cb(lv_event_t *e) {
-  lv_obj_t *dropdown = lv_event_get_target(e);
-  call_data_t *data = (call_data_t *)lv_event_get_user_data(e);
-
-  uint16_t selected_idx = lv_dropdown_get_selected(dropdown);
-  log_info("CallApplet", "Dropdown selected: %d", selected_idx);
-
-  // Update config
-  data->config.default_account_index = selected_idx;
-  config_save_app_settings(&data->config);
-
-  // Update status icon
-  if (selected_idx < data->account_count) {
-    update_account_status(data, selected_idx,
-                          data->account_status[selected_idx]);
-  } else {
-    // "None/Always Ask" selected - set to gray
-    if (data->dialer_status_icon)
-      lv_obj_set_style_bg_color(data->dialer_status_icon,
-                                lv_color_hex(0x404040), 0);
-  }
-}
+/* Unused function removed */
 
 
 static void search_and_add_to_group(lv_obj_t * parent, lv_group_t * group) {
@@ -715,6 +261,154 @@ static void search_and_add_to_group(lv_obj_t * parent, lv_group_t * group) {
         search_and_add_to_group(lv_obj_get_child(parent, i), group);
     }
 }
+
+// Implement Missing Callbacks
+static void back_to_home(lv_event_t *e) {
+    (void)e;
+    log_info("CallApplet", "Back to Home");
+    // Use back() to get the correct right-slide animation
+    applet_manager_back();
+}
+
+/* External functions from settings_applet.c */
+extern void settings_open_accounts(void);
+extern void settings_open_call_settings(void);
+
+static void close_app_menu(void) {
+    if (g_app_menu_modal) {
+        lv_obj_del(g_app_menu_modal);
+        g_app_menu_modal = NULL;
+    }
+}
+
+static void app_menu_cancel(lv_event_t *e) {
+    (void)e;
+    close_app_menu();
+}
+
+static void app_menu_item_clicked(lv_event_t *e) {
+    const char *target = (const char *)lv_event_get_user_data(e);
+    if (target) {
+        log_info("CallApplet", "Menu: Action %s", target);
+        
+        if (strcmp(target, "ACCOUNTS") == 0) {
+             settings_open_accounts();
+             applet_manager_launch("Settings");
+        } else if (strcmp(target, "SETTINGS_CALL") == 0) {
+             settings_open_call_settings();
+             applet_manager_launch("Settings");
+        } else {
+             applet_manager_launch(target);
+        }
+    }
+    close_app_menu();
+}
+
+static void show_app_menu(void) {
+    if (g_app_menu_modal) return;
+
+    // Use active screen instead of layer_top to ensure it hides when applet hides
+    g_app_menu_modal = lv_obj_create(lv_scr_act());
+    lv_obj_set_size(g_app_menu_modal, LV_PCT(100), LV_PCT(100));
+    lv_obj_set_style_bg_color(g_app_menu_modal, lv_color_black(), 0);
+    lv_obj_set_style_bg_opa(g_app_menu_modal, LV_OPA_50, 0);
+    lv_obj_add_event_cb(g_app_menu_modal, app_menu_cancel, LV_EVENT_CLICKED, NULL);
+    lv_obj_move_foreground(g_app_menu_modal);
+
+    // Menu Container (Top Right aligned)
+    lv_obj_t *menu = lv_obj_create(g_app_menu_modal);
+    lv_obj_set_size(menu, 200, LV_SIZE_CONTENT);
+    lv_obj_align(menu, LV_ALIGN_TOP_RIGHT, -10, 60); // Below header
+    lv_obj_set_flex_flow(menu, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_all(menu, 0, 0);
+    lv_obj_set_style_radius(menu, 5, 0);
+    lv_obj_add_event_cb(menu, NULL, LV_EVENT_CLICKED, NULL); // Eat clicks on the menu itself
+    
+    struct { const char *name; const char *icon; const char *target; } items[] = {
+        {"Contacts", LV_SYMBOL_DIRECTORY, "Contacts"},
+        {"Call History", LV_SYMBOL_LIST, "Call Log"},
+        {"Accounts", LV_SYMBOL_LIST, "ACCOUNTS"},
+        {"Settings", LV_SYMBOL_SETTINGS, "SETTINGS_CALL"},
+        {"About", LV_SYMBOL_FILE, "About"}
+    };
+    
+    for (size_t i=0; i < sizeof(items)/sizeof(items[0]); i++) {
+        lv_obj_t *btn = lv_btn_create(menu);
+        lv_obj_set_size(btn, LV_PCT(100), 50);
+        lv_obj_set_style_bg_opa(btn, 0, 0);
+        lv_obj_set_style_shadow_width(btn, 0, 0);
+        lv_obj_set_flex_flow(btn, LV_FLEX_FLOW_ROW);
+        lv_obj_set_flex_align(btn, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+        lv_obj_set_style_pad_left(btn, 15, 0);
+        lv_obj_set_style_pad_gap(btn, 10, 0);
+        
+        lv_obj_t *icon = lv_label_create(btn);
+        lv_label_set_text(icon, items[i].icon);
+        lv_obj_set_style_text_color(icon, lv_color_black(), 0);
+        
+        lv_obj_t *lbl = lv_label_create(btn);
+        lv_label_set_text(lbl, items[i].name);
+        lv_obj_set_style_text_color(lbl, lv_color_black(), 0);
+        
+        lv_obj_add_event_cb(btn, app_menu_item_clicked, LV_EVENT_CLICKED, (void*)items[i].target);
+    }
+}
+
+static void menu_btn_clicked(lv_event_t *e) {
+    (void)e;
+    log_info("CallApplet", "Menu clicked");
+    show_app_menu();
+}
+
+static void status_icon_clicked(lv_event_t *e) {
+    (void)e;
+    log_info("CallApplet", "Status Icon clicked - Triggering Register");
+    if (!g_call_data) return;
+    
+    int idx = g_call_data->config.default_account_index;
+    if (idx >= 0 && idx < g_call_data->account_count) {
+        voip_account_t *acc = &g_call_data->accounts[idx];
+        log_info("CallApplet", "Registering: %s @ %s", acc->username, acc->server);
+        
+        // Show visual feedback immediately (turn Grey)
+        if (g_call_data->dialer_status_icon) {
+             lv_obj_set_style_bg_color(g_call_data->dialer_status_icon, lv_color_hex(0x808080), 0);
+        }
+        
+        baresip_manager_account_register_simple(acc->username, acc->server);
+    }
+}
+
+static void ta_event_cb(lv_event_t *e) {
+    (void)e;
+    // Placeholder
+}
+
+static void call_key_handler(lv_event_t *e) {
+    (void)e;
+    // Placeholder
+}
+
+static void reg_status_callback(const char *aor, reg_status_t status) {
+    if (!g_call_data) return;
+    
+    // Simple iteration to find account by AOR
+    for (int i = 0; i < g_call_data->account_count; i++) {
+         const char *user = g_call_data->accounts[i].username;
+         const char *domain = g_call_data->accounts[i].server;
+         
+         // Use loose matching: Check if AOR contains username AND domain
+         if (strstr(aor, user) && strstr(aor, domain)) {
+             g_call_data->account_status[i] = status;
+             g_call_data->status_update_pending = true;
+             // Update status icon immediately if current account
+             if (i == g_call_data->config.default_account_index) {
+                 update_account_status(g_call_data, i, status);
+             }
+         }
+    }
+}
+
 
 static void show_dialer_screen(call_data_t *data) {
   lv_obj_clear_flag(data->dialer_screen, LV_OBJ_FLAG_HIDDEN);
@@ -749,7 +443,7 @@ static void show_dialer_screen(call_data_t *data) {
 }
 
 // Helper to clean SIP URI for display
-static void format_sip_uri(const char *in, char *out, size_t out_size) {
+void format_sip_uri(const char *in, char *out, size_t out_size) {
   if (!in || !out || out_size == 0) {
     if (out && out_size > 0)
       out[0] = '\0';
@@ -801,24 +495,62 @@ static void show_active_call_screen(call_data_t *data, const char *number,
   if (data->call_main_area) {
     if (incoming) {
       lv_obj_set_style_bg_opa(data->call_main_area, LV_OPA_COVER, 0);
-      lv_obj_set_style_bg_color(data->call_main_area, lv_color_black(), 0);
+      lv_obj_set_style_bg_color(data->call_main_area, lv_color_white(), 0);
     } else {
       lv_obj_set_style_bg_opa(data->call_main_area, LV_OPA_TRANSP, 0);
     }
   }
 
   if (data->call_number_label) {
-    char display_name[256];
-    baresip_manager_get_current_call_display_name(display_name, sizeof(display_name));
+    char final_name[256];
+    char contact_name[256];
+    bool found_contact = false;
     
-    // Fallback if no call active (e.g. setting up)
-    if (strlen(display_name) == 0) {
-         format_sip_uri(number, display_name, sizeof(display_name));
+    // 1. Try Local Contact (Exact)
+    if (db_contact_find(number, contact_name, sizeof(contact_name)) == 0) {
+         found_contact = true;
+    } 
+    // 2. Try Local Contact (Fuzzy - User Part)
+    else {
+        char user_buf[128];
+        strncpy(user_buf, number, sizeof(user_buf)-1);
+        user_buf[sizeof(user_buf)-1] = '\0';
+        
+        char *sc = strchr(user_buf, ';');
+        if (sc) *sc = '\0';
+        char *at = strchr(user_buf, '@');
+        if (at) *at = '\0';
+        char *start = user_buf;
+        if (strncmp(start, "sip:", 4) == 0) start += 4;
+        else if (strncmp(start, "sips:", 5) == 0) start += 5;
+        char *colon = strchr(start, ':'); // Password check
+        if (colon) *colon = '\0';
+
+        if (strlen(start) > 0) {
+             if (db_contact_find(start, contact_name, sizeof(contact_name)) == 0) {
+                 found_contact = true;
+             }
+        }
+    }
+
+    if (found_contact) {
+         snprintf(final_name, sizeof(final_name), "%s", contact_name);
+    } else {
+        // 3. Try Remote Display Name
+        char remote_dn[256];
+        baresip_manager_get_current_call_display_name(remote_dn, sizeof(remote_dn));
+        
+        if (strlen(remote_dn) > 0 && strcmp(remote_dn, "unknown") != 0) {
+             snprintf(final_name, sizeof(final_name), "%s", remote_dn);
+        } else {
+             // 4. Fallback to Cleaned URI
+             format_sip_uri(number, final_name, sizeof(final_name));
+        }
     }
     
-    // Name Label gets Priority Name
+    // Name Label = Name
     if (data->call_name_label) {
-         lv_label_set_text(data->call_name_label, display_name);
+         lv_label_set_text(data->call_name_label, final_name);
     }
     
     // Number Label gets URI (for reference)
@@ -891,7 +623,7 @@ static void show_active_call_screen(call_data_t *data, const char *number,
   data->call_start_time = lv_tick_get();
 }
 
-static void number_btn_clicked(lv_event_t *e) {
+void number_btn_clicked(lv_event_t *e) {
   applet_t *applet = applet_manager_get_current();
   call_data_t *data = (call_data_t *)applet->user_data;
   const char *digit = lv_event_get_user_data(e);
@@ -908,7 +640,7 @@ static void number_btn_clicked(lv_event_t *e) {
   }
 }
 
-static void backspace_btn_clicked(lv_event_t *e) {
+void backspace_btn_clicked(lv_event_t *e) {
   (void)e;
   applet_t *applet = applet_manager_get_current();
   call_data_t *data = (call_data_t *)applet->user_data;
@@ -918,7 +650,7 @@ static void backspace_btn_clicked(lv_event_t *e) {
   }
 }
 
-static void call_btn_clicked(lv_event_t *e) {
+void call_btn_clicked(lv_event_t *e) {
   (void)e;
   applet_t *applet = applet_manager_get_current();
   call_data_t *data = (call_data_t *)applet->user_data;
@@ -979,14 +711,14 @@ static void call_btn_clicked(lv_event_t *e) {
   }
 }
 
-static void video_call_btn_clicked(lv_event_t *e) {
+void video_call_btn_clicked(lv_event_t *e) {
   (void)e;
   applet_t *applet = applet_manager_get_current();
   call_data_t *data = (call_data_t *)applet->user_data;
 
   // Sync from TA
   const char *txt = lv_textarea_get_text(data->dialer_ta);
-  if(txt) strncpy(data->number_buffer, txt, sizeof(data->number_buffer)-1);
+  if(txt) snprintf(data->number_buffer, sizeof(data->number_buffer), "%s", txt);
 
   if (strlen(data->number_buffer) > 0) {
     app_config_t config;
@@ -997,8 +729,7 @@ static void video_call_btn_clicked(lv_event_t *e) {
     // Check if "None" (-1) or invalid
     if (acc_idx < 0) {
       log_info("CallApplet", "No default account, showing picker for VIDEO");
-      strncpy(data->pending_number, data->number_buffer,
-              sizeof(data->pending_number) - 1);
+      snprintf(data->pending_number, sizeof(data->pending_number), "%s", data->number_buffer);
       data->pending_video = true;
       show_account_picker(data);
       return;
@@ -1113,7 +844,7 @@ static void account_picker_event_cb(lv_event_t *e) {
 
 static void close_picker(lv_event_t *e);
 
-static void show_account_picker(call_data_t *data) {
+void show_account_picker(call_data_t *data) {
   if (data->account_picker_modal)
     return;
 
@@ -1166,7 +897,7 @@ static void show_account_picker(call_data_t *data) {
   // click-outside? Or clean handler. I'll
   // define static close_picker
 }
-static void close_picker(lv_event_t *e) {
+void close_picker(lv_event_t *e) {
   call_data_t *d = (call_data_t *)lv_event_get_user_data(e);
   if (d && d->account_picker_modal) {
     lv_obj_del(d->account_picker_modal);
@@ -1174,20 +905,20 @@ static void close_picker(lv_event_t *e) {
   }
 }
 
-static void answer_btn_clicked(lv_event_t *e) {
+void answer_btn_clicked(lv_event_t *e) {
   (void)e;
   log_info("CallApplet", "Answer clicked");
   baresip_manager_answer_call(false);
   baresip_manager_answer_call(false);
 }
 
-static void video_answer_btn_clicked(lv_event_t *e) {
+void video_answer_btn_clicked(lv_event_t *e) {
   (void)e;
   log_info("CallApplet", "Video Answer clicked");
   baresip_manager_answer_call(true);
 }
 
-static void hangup_btn_clicked(lv_event_t *e) {
+void hangup_btn_clicked(lv_event_t *e) {
   (void)e;
   applet_t *applet = applet_manager_get_current();
   call_data_t *data = (call_data_t *)applet->user_data;
@@ -1209,7 +940,7 @@ static void hangup_btn_clicked(lv_event_t *e) {
   // Stay/Switch if >0 calls).
 }
 
-static void mute_btn_clicked(lv_event_t *e) {
+void mute_btn_clicked(lv_event_t *e) {
   (void)e;
   applet_t *applet = applet_manager_get_current();
   call_data_t *data = (call_data_t *)applet->user_data;
@@ -1223,7 +954,7 @@ static void mute_btn_clicked(lv_event_t *e) {
   log_info("CallApplet", "Mute: %d", data->is_muted);
 }
 
-static void speaker_btn_clicked(lv_event_t *e) {
+void speaker_btn_clicked(lv_event_t *e) {
   (void)e;
   applet_t *applet = applet_manager_get_current();
   call_data_t *data = (call_data_t *)applet->user_data;
@@ -1238,7 +969,7 @@ static void speaker_btn_clicked(lv_event_t *e) {
   log_info("CallApplet", "Speaker: %d", data->is_speaker);
 }
 
-static void hold_btn_clicked(lv_event_t *e) {
+void hold_btn_clicked(lv_event_t *e) {
   (void)e;
   applet_t *applet = applet_manager_get_current();
   call_data_t *data = (call_data_t *)applet->user_data;
@@ -1307,7 +1038,7 @@ static void hold_btn_clicked(lv_event_t *e) {
   log_info("CallApplet", "Hold: %d", data->is_hold);
 }
 
-static void update_call_duration(lv_timer_t *timer) {
+void update_call_duration(lv_timer_t *timer) {
   call_data_t *data = (call_data_t *)timer->user_data;
   if (!data || !data->active_call_screen ||
       lv_obj_has_flag(data->active_call_screen, LV_OBJ_FLAG_HIDDEN))
@@ -1351,7 +1082,7 @@ static void update_call_duration(lv_timer_t *timer) {
   lv_label_set_text(data->call_duration_label, time_str);
 }
 
-static void update_account_dropdowns(call_data_t *data) {
+void update_account_dropdowns(call_data_t *data) {
   char options[1024] = "";
   for (int i = 0; i < data->account_count; i++) {
     if (i > 0)
@@ -1374,120 +1105,32 @@ static void update_account_dropdowns(call_data_t *data) {
 }
 
 // Helper to draw an incoming call card
-static void draw_incoming_card(lv_obj_t *parent, const call_info_t *call) {
-  lv_obj_t *card = lv_obj_create(parent);
-  lv_obj_set_width(card, LV_PCT(90));
-  lv_obj_set_height(card, 140); // Fixed height for card
-  lv_obj_set_style_bg_color(card, lv_color_hex(0x2C3E50),
-                            0); // Dark Blue-Grey
-  lv_obj_set_style_radius(card, 20, 0);
-  lv_obj_set_style_border_width(card, 0, 0);
-  lv_obj_clear_flag(card, LV_OBJ_FLAG_SCROLLABLE);
-
-  // Avatar (Left)
-  lv_obj_t *avatar = lv_obj_create(card);
-  lv_obj_set_size(avatar, 60, 60);
-  lv_obj_set_style_radius(avatar, LV_RADIUS_CIRCLE, 0);
-  lv_obj_set_style_bg_color(avatar, lv_palette_main(LV_PALETTE_BLUE), 0);
-  lv_obj_align(avatar, LV_ALIGN_TOP_LEFT, 10, 10);
-
-  lv_obj_t *avatar_icon = lv_label_create(avatar);
-  lv_label_set_text(avatar_icon, LV_SYMBOL_EYE_OPEN);
-  lv_obj_set_style_text_font(avatar_icon, &lv_font_montserrat_32, 0);
-  lv_obj_set_style_text_color(avatar_icon, lv_color_white(), 0);
-  lv_obj_center(avatar_icon);
-
-  // Name (Right of Avatar)
-  lv_obj_t *name = lv_label_create(card);
-  lv_label_set_text(name, call->peer_uri);
-  lv_obj_set_style_text_font(name, &lv_font_montserrat_20, 0);
-  lv_obj_set_style_text_color(name, lv_color_white(), 0);
-  lv_obj_align(name, LV_ALIGN_TOP_LEFT, 80, 20);
-  lv_label_set_long_mode(name, LV_LABEL_LONG_DOT);
-  lv_obj_set_width(name, 200);
-
-  // Status (Below Name)
-  lv_obj_t *status = lv_label_create(card);
-  lv_label_set_text(status, LV_SYMBOL_BELL " Incoming...");
-  lv_obj_set_style_text_color(status, lv_color_white(), 0);
-  lv_obj_align(status, LV_ALIGN_TOP_LEFT, 80, 50);
-
-  // Buttons Row (Bottom)
-  lv_obj_t *btn_row = lv_obj_create(card);
-  lv_obj_set_size(btn_row, LV_PCT(100), 60);
-  lv_obj_align(btn_row, LV_ALIGN_BOTTOM_MID, 0, 0);
-  lv_obj_set_style_bg_opa(btn_row, 0, 0);
-  lv_obj_set_style_border_width(btn_row, 0, 0);
-  lv_obj_set_flex_flow(btn_row, LV_FLEX_FLOW_ROW);
-  lv_obj_set_flex_align(btn_row, LV_FLEX_ALIGN_SPACE_AROUND,
-                        LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-  lv_obj_set_style_pad_all(btn_row, 0, 0);
-
-  // Reject Button (Red)
-  lv_obj_t *reject_btn = lv_btn_create(btn_row);
-  lv_obj_set_size(reject_btn, 50, 50);
-  lv_obj_set_style_radius(reject_btn, LV_RADIUS_CIRCLE, 0);
-  lv_obj_set_style_bg_color(reject_btn, lv_color_hex(0xFF3B30),
-                            0); // Red
-
-  lv_obj_t *reject_icon = lv_label_create(reject_btn);
-  lv_label_set_text(reject_icon,
-                    LV_SYMBOL_CALL);                      // Rotate?
-  lv_obj_set_style_transform_angle(reject_icon, 1350, 0); // Down-left
-  lv_obj_center(reject_icon);
-  lv_obj_add_event_cb(reject_btn, query_reject_action, LV_EVENT_CLICKED,
-                      call->id); // Use new handler
-
-  // Answer Button (Green)
-  lv_obj_t *answer_btn = lv_btn_create(btn_row);
-  lv_obj_set_size(answer_btn, 50, 50);
-  lv_obj_set_style_radius(answer_btn, LV_RADIUS_CIRCLE, 0);
-  lv_obj_set_style_bg_color(answer_btn, lv_color_hex(0x4CD964),
-                            0); // Green
-
-  lv_obj_t *answer_icon = lv_label_create(answer_btn);
-  lv_label_set_text(answer_icon, LV_SYMBOL_CALL);
-  lv_obj_center(answer_icon);
-  lv_obj_add_event_cb(answer_btn, query_answer_action, LV_EVENT_CLICKED,
-                      call->id); // Use new handler
-
-  // Placeholder buttons for Video/Message
-  lv_obj_t *video_btn = lv_btn_create(btn_row);
-  lv_obj_set_size(video_btn, 50, 50);
-  lv_obj_set_style_radius(video_btn, LV_RADIUS_CIRCLE, 0);
-  lv_obj_set_style_bg_color(video_btn, lv_color_hex(0x808080),
-                            0); // Grey
-  lv_obj_t *vid_lbl = lv_label_create(video_btn);
-  lv_label_set_text(vid_lbl, LV_SYMBOL_VIDEO);
-  lv_obj_center(vid_lbl);
+void show_dtmf_clicked(lv_event_t *e) {
+  void *call_id = lv_event_get_user_data(e);
+  if (call_id) {
+    baresip_manager_switch_to(call_id);
+    // Fetch data to update list
+    applet_t *applet = applet_manager_get_applet("Call");
+    if (applet && applet->user_data) {
+         update_call_list((call_data_t*)applet->user_data, NULL);
+    }
+  }
 }
 
 static void call_list_item_clicked(lv_event_t *e) {
   void *call_id = lv_event_get_user_data(e);
   if (call_id) {
     baresip_manager_switch_to(call_id);
-    update_call_list(g_call_data, NULL);
+    // Fetch data to update list
+    applet_t *applet = applet_manager_get_applet("Call");
+    if (applet && applet->user_data) {
+         update_call_list((call_data_t*)applet->user_data, NULL);
+    }
   }
 }
 
 // Action Handlers for Cards
-static void query_answer_action(lv_event_t *e) {
-  void *call_id = lv_event_get_user_data(e);
-  if (call_id) {
-    log_info("CallApplet", "Card Answer: Switching to %p", call_id);
-    baresip_manager_switch_to(call_id);
-    baresip_manager_answer_call(false);
-  }
-}
-
-static void query_reject_action(lv_event_t *e) {
-  void *call_id = lv_event_get_user_data(e);
-  if (call_id) {
-    log_info("CallApplet", "Card Reject: Switching to %p", call_id);
-    baresip_manager_switch_to(call_id);
-    baresip_manager_hangup();
-  }
-}
+// Action Handlers for Cards - Removed unused query callbacks
 
 // Wrapper for existing single-button (might
 // be unused now if we card-ify everything,
@@ -1521,8 +1164,8 @@ static void on_card_reject(lv_event_t *e) {
 }
 
 static void on_card_forward(lv_event_t *e) {
-  void *call_id = lv_event_get_user_data(e);
-  log_info("CallApplet", "Forward clicked for %p (Not Implemented)", call_id);
+  (void)e;
+  log_info("CallApplet", "Forward clicked (Not Implemented)");
 }
 
 static void update_call_list(call_data_t *data, void *ignore_id) {
@@ -1592,8 +1235,7 @@ static void update_call_list(call_data_t *data, void *ignore_id) {
     baresip_manager_switch_to(calls[current_idx].id);
     // Update local state to match
     data->current_state = calls[current_idx].state;
-    strncpy(data->current_peer_uri, calls[current_idx].peer_uri,
-            sizeof(data->current_peer_uri) - 1);
+    snprintf(data->current_peer_uri, sizeof(data->current_peer_uri), "%s", calls[current_idx].peer_uri);
   }
 
   // 1. Update Main Area (Current
@@ -1861,8 +1503,8 @@ static void update_call_list(call_data_t *data, void *ignore_id) {
   }
 }
 
-static void update_video_geometry(lv_timer_t *t) {
-  call_data_t *data = (call_data_t *)t->user_data;
+void update_video_geometry(lv_timer_t *timer) {
+  call_data_t *data = (call_data_t *)timer->user_data;
   if (!data || !data->video_remote) {
     return;
   }
@@ -1903,6 +1545,22 @@ static void update_video_geometry(lv_timer_t *t) {
   }
 }
 
+void status_timer_cb(lv_timer_t *timer) {
+  call_data_t *data = (call_data_t *)timer->user_data;
+  if (!data || !data->status_update_pending)
+    return;
+
+  data->status_update_pending = false;
+
+  // Update account status for the default account if it's visible
+  if (data->dialer_account_dropdown) {
+    uint16_t selected = lv_dropdown_get_selected(data->dialer_account_dropdown);
+    if (selected < data->account_count) {
+      update_account_status(data, selected, data->account_status[selected]);
+    }
+  }
+}
+
 static void exit_timer_cb(lv_timer_t *t) {
   call_data_t *data = (call_data_t *)t->user_data;
   data->exit_timer = NULL;
@@ -1910,7 +1568,7 @@ static void exit_timer_cb(lv_timer_t *t) {
 }
 
 // --- Thread-Safe UI Update Logic ---
-static void check_ui_updates(lv_timer_t *t) {
+void check_ui_updates(lv_timer_t *t) {
   call_data_t *data = (call_data_t *)t->user_data;
   if (!data || !data->ui_update_needed)
     return;
@@ -2010,9 +1668,8 @@ static void launch_call_applet_async(void *data) {
   applet_manager_launch("Call");
 }
 
-static void on_call_state_change(enum call_state state, const char *peer_uri,
-                                 void *call) {
-  (void)call;
+void on_call_state_change(enum call_state state, const char *peer_uri, void *call_ptr) {
+  struct call *call = (struct call *)call_ptr;
   if (!g_call_data) {
     log_error("CallApplet", "g_call_data is NULL, cannot handle state change");
     return;
@@ -2063,14 +1720,13 @@ static void on_call_state_change(enum call_state state, const char *peer_uri,
   }
 }
 
-static int call_init(applet_t *applet) {
+int call_init(applet_t *applet) {
   log_info("CallApplet", "Initializing");
 
   call_data_t *data = lv_mem_alloc(sizeof(call_data_t));
   memset(data, 0, sizeof(call_data_t));
   applet->user_data = data;
-  g_call_data = data; // Global reference
-                      // for callbacks
+  g_call_data = data;
 
   data->config.default_account_index = 0;
   data->config.preferred_codec = CODEC_OPUS;
@@ -2087,8 +1743,7 @@ static int call_init(applet_t *applet) {
     strcpy(data->current_peer_uri, "Unknown");
   }
 
-  // Update global pointer
-  g_call_data = data;
+  // Update global pointer - removed
   static int baresip_initialized = 0;
   if (!baresip_initialized) {
     log_info("CallApplet", "Initializing baresip manager");
@@ -2101,7 +1756,7 @@ static int call_init(applet_t *applet) {
     baresip_initialized = 1;
   }
 
-  g_call_data = data;
+  // g_call_data removed
   data->status_update_pending = false;
   data->status_timer = lv_timer_create(status_timer_cb, 200, data);
 
@@ -2125,8 +1780,17 @@ static int call_init(applet_t *applet) {
   }
 
   data->dialer_screen = lv_obj_create(applet->screen);
-  data->active_call_screen = lv_obj_create(applet->screen);
   lv_obj_set_size(data->dialer_screen, LV_PCT(100), LV_PCT(100));
+  lv_obj_set_style_pad_all(data->dialer_screen, 0, 0);
+  lv_obj_set_style_border_width(data->dialer_screen, 0, 0);
+  lv_obj_set_style_radius(data->dialer_screen, 0, 0);
+  lv_obj_add_flag(data->dialer_screen, LV_OBJ_FLAG_GESTURE_BUBBLE);
+
+  data->active_call_screen = lv_obj_create(applet->screen);
+  lv_obj_set_size(data->dialer_screen, LV_PCT(100), LV_PCT(100)); // Typo in original? No, it sets dialer_screen size again?
+  // Using original logic but adding flag to active_call_screen too
+  lv_obj_set_size(data->active_call_screen, LV_PCT(100), LV_PCT(100)); 
+  lv_obj_add_flag(data->active_call_screen, LV_OBJ_FLAG_GESTURE_BUBBLE);
   lv_obj_set_size(data->active_call_screen, LV_PCT(100), LV_PCT(100));
   lv_obj_add_flag(data->active_call_screen, LV_OBJ_FLAG_HIDDEN);
   lv_obj_set_style_bg_opa(data->active_call_screen, 0,
@@ -2380,36 +2044,15 @@ static int call_init(applet_t *applet) {
   lv_obj_set_flex_align(dialer_container, LV_FLEX_ALIGN_START,
                         LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
   lv_obj_clear_flag(dialer_container, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_set_style_pad_all(dialer_container, 0, 0);
+  lv_obj_set_style_border_width(dialer_container, 0, 0);
+  lv_obj_set_style_radius(dialer_container, 0, 0);
+  lv_obj_add_flag(dialer_container, LV_OBJ_FLAG_GESTURE_BUBBLE);
 
-  lv_obj_t *dialer_header = lv_obj_create(dialer_container);
-  lv_obj_set_size(dialer_header, LV_PCT(100), 60);
-  lv_obj_set_scrollbar_mode(dialer_header, LV_SCROLLBAR_MODE_OFF);
-  lv_obj_clear_flag(dialer_header, LV_OBJ_FLAG_SCROLLABLE);
-  lv_obj_set_flex_flow(dialer_header, LV_FLEX_FLOW_ROW);
-  lv_obj_set_flex_align(dialer_header, LV_FLEX_ALIGN_SPACE_BETWEEN,
-                        LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-
-  // Back Button for Dialer
-  lv_obj_t *back_btn = lv_btn_create(dialer_header);
-  lv_obj_set_size(back_btn, 50, 50);
-  lv_obj_t *back_label = lv_label_create(back_btn);
-  lv_label_set_text(back_label, "<");
-  lv_obj_set_style_text_font(back_label, &lv_font_montserrat_32, 0);
-  lv_obj_center(back_label);
-  lv_obj_add_event_cb(back_btn, back_to_home, LV_EVENT_CLICKED, NULL);
-
-  lv_obj_t *title_label = lv_label_create(dialer_header);
-  lv_label_set_text(title_label, "Call");
-  lv_obj_set_style_text_font(title_label, &lv_font_montserrat_24, 0);
-  lv_obj_set_flex_grow(title_label, 1);
-  lv_obj_set_style_text_align(title_label, LV_TEXT_ALIGN_CENTER, 0);
-
-  lv_obj_t *menu_btn = lv_btn_create(dialer_header);
-  lv_obj_set_size(menu_btn, 50, 50);
-  lv_obj_t *menu_label = lv_label_create(menu_btn);
-  lv_label_set_text(menu_label, LV_SYMBOL_LIST);
-  lv_obj_center(menu_label);
-  lv_obj_add_event_cb(menu_btn, menu_btn_clicked, LV_EVENT_CLICKED, NULL);
+  lv_obj_t *dialer_header = ui_create_title_bar(dialer_container, "Call", true, back_to_home, NULL);
+  
+  // Add Menu Button
+  ui_header_add_action_btn(dialer_header, LV_SYMBOL_LIST, menu_btn_clicked, NULL);
 
   lv_obj_t *account_row = lv_obj_create(dialer_container);
   lv_obj_set_size(account_row, LV_PCT(90), 50);
@@ -2446,7 +2089,7 @@ static int call_init(applet_t *applet) {
   lv_keyboard_set_textarea(data->keyboard, data->dialer_ta);
   lv_keyboard_set_mode(data->keyboard, LV_KEYBOARD_MODE_TEXT_LOWER);
   lv_obj_add_flag(data->keyboard, LV_OBJ_FLAG_HIDDEN);
-  lv_obj_add_event_cb(data->keyboard, kb_event_cb, LV_EVENT_ALL, data);
+
 
   lv_obj_t *numpad = lv_obj_create(dialer_container);
   lv_obj_set_size(numpad, LV_PCT(80), 240);
@@ -2517,7 +2160,7 @@ static int call_init(applet_t *applet) {
   update_account_dropdowns(data);
 
   // Gesture Bubbling
-  lv_obj_add_event_cb(applet->screen, handle_swipe_back, LV_EVENT_GESTURE, NULL);
+
   lv_obj_add_flag(data->dialer_screen, LV_OBJ_FLAG_GESTURE_BUBBLE);
   lv_obj_add_flag(data->active_call_screen, LV_OBJ_FLAG_GESTURE_BUBBLE);
   lv_obj_add_flag(dialer_container, LV_OBJ_FLAG_GESTURE_BUBBLE);
@@ -2556,12 +2199,12 @@ static bool check_network_up(void) {
 
 // Public API to Open Call Applet with Number
 void call_applet_open(const char *number) {
-    if (!g_call_data) return;
-    
-    // switch to call applet
     applet_manager_launch("Call");
 
-    // 1. Check Network
+    applet_t *applet = applet_manager_get_applet("Call");
+    if (!applet || !applet->user_data) return;
+    call_data_t *data = (call_data_t *)applet->user_data;
+
     if (!check_network_up()) {
         static const char * btns[] = {"OK", ""};
         lv_obj_t * m = lv_msgbox_create(NULL, "Error", "No network connection", btns, true);
@@ -2569,8 +2212,7 @@ void call_applet_open(const char *number) {
         return;
     }
 
-    // 2. Check account count
-    if (g_call_data->account_count == 0) {
+    if (data->account_count == 0) {
         static const char * btns[] = {"OK", ""};
         lv_obj_t * m = lv_msgbox_create(NULL, "Error", "No account", btns, true);
         lv_obj_center(m);
@@ -2578,28 +2220,27 @@ void call_applet_open(const char *number) {
     }
     
     if (!number || strlen(number) == 0) {
-        show_dialer_screen(g_call_data);
+        show_dialer_screen(data);
         return;
     }
     
-    // account selection logic
-    bool ambiguous = (g_call_data->config.default_account_index < 0 && g_call_data->account_count > 1);
-    
+    bool ambiguous = (data->config.default_account_index < 0 && data->account_count > 1);
     if (ambiguous) {
-        strncpy(g_call_data->pending_number, number, sizeof(g_call_data->pending_number)-1);
-        g_call_data->pending_video = false;
-        show_account_picker(g_call_data);
+        strncpy(data->pending_number, number, sizeof(data->pending_number)-1);
+        data->pending_video = false;
+        show_account_picker(data);
     } else {
-        // Direct Dial
         baresip_manager_call(number);
     }
 }
 
 void call_applet_video_open(const char *number) {
-    // switch to call applet
     applet_manager_launch("Call");
 
-    // 1. Check Network
+    applet_t *applet = applet_manager_get_applet("Call");
+    if (!applet || !applet->user_data) return;
+    call_data_t *data = (call_data_t *)applet->user_data;
+
     if (!check_network_up()) {
         static const char * btns[] = {"OK", ""};
         lv_obj_t * m = lv_msgbox_create(NULL, "Error", "No network connection", btns, true);
@@ -2607,8 +2248,7 @@ void call_applet_video_open(const char *number) {
         return;
     }
 
-    // 2. Check account count
-    if (g_call_data->account_count == 0) {
+    if (data->account_count == 0) {
         static const char * btns[] = {"OK", ""};
         lv_obj_t * m = lv_msgbox_create(NULL, "Error", "No account", btns, true);
         lv_obj_center(m);
@@ -2616,17 +2256,26 @@ void call_applet_video_open(const char *number) {
     }
     
     if (!number || strlen(number) == 0) {
-        show_dialer_screen(g_call_data);
+        show_dialer_screen(data);
         return;
     }
     
-    bool ambiguous = (g_call_data->config.default_account_index < 0 && g_call_data->account_count > 1);
+    bool ambiguous = (data->config.default_account_index < 0 && data->account_count > 1);
      if (ambiguous) {
-        strncpy(g_call_data->pending_number, number, sizeof(g_call_data->pending_number)-1);
-        g_call_data->pending_video = true;
-        show_account_picker(g_call_data);
+        strncpy(data->pending_number, number, sizeof(data->pending_number)-1);
+        data->pending_video = true;
+        show_account_picker(data);
     } else {
-        baresip_manager_videocall(number);
+        int acc_idx = data->config.default_account_index;
+        if (acc_idx < 0) acc_idx = 0; // Fallback
+        
+        voip_account_t *acc = &data->accounts[acc_idx];
+        char aor[256];
+        snprintf(aor, sizeof(aor), "sip:%s@%s", acc->username, acc->server);
+        
+        baresip_manager_videocall_with_account(number, aor);
+        // Show active call screen immediately
+        show_active_call_screen(data, number, false);
     }
 }
 
@@ -2646,6 +2295,16 @@ static void call_start(applet_t *applet) {
     strncpy(data->current_peer_uri, peer, sizeof(data->current_peer_uri) - 1);
   } else {
     data->current_peer_uri[0] = '\0';
+  }
+
+  // Refresh Account Status
+  log_info("CallApplet", "Start: Refreshing %d accounts", data->account_count);
+  for (int i = 0; i < data->account_count; i++) {
+      char aor[256];
+      snprintf(aor, sizeof(aor), "sip:%s@%s", data->accounts[i].username, data->accounts[i].server);
+      reg_status_t status = baresip_manager_get_account_status(aor);
+      log_info("CallApplet", "Start: Account %d (%s) status=%d", i, aor, status);
+      update_account_status(data, i, status);
   }
 
   if (g_req_view_mode != VIEW_MODE_NONE) {
@@ -2748,6 +2407,16 @@ static void call_resume(applet_t *applet) {
     data->current_peer_uri[0] = '\0';
   }
 
+  // Refresh Account Status on Resume
+  log_info("CallApplet", "Resume: Refreshing %d accounts", data->account_count);
+  for (int i = 0; i < data->account_count; i++) {
+      char aor[256];
+      snprintf(aor, sizeof(aor), "sip:%s@%s", data->accounts[i].username, data->accounts[i].server);
+      reg_status_t status = baresip_manager_get_account_status(aor);
+      log_info("CallApplet", "Resume: Account %d (%s) status=%d", i, aor, status);
+      update_account_status(data, i, status);
+  }
+
   log_info("CallApplet", "Resuming. State=%d, RequestActive=%d, ViewMode=%d",
            data->current_state, data->request_active_view, g_req_view_mode);
 
@@ -2841,7 +2510,7 @@ static void call_stop(applet_t *applet) {
 
 static void call_destroy(applet_t *applet) {
   log_info("CallApplet", "Destroying");
-  g_call_data = NULL; // Prevent dangling pointer
+  // g_call_data removed
   if (applet->user_data) {
     lv_mem_free(applet->user_data);
     applet->user_data = NULL;

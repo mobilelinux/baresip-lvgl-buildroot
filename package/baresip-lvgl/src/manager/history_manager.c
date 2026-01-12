@@ -169,3 +169,38 @@ int history_save(void) {
   // No-op
   return 0;
 }
+
+void history_delete_mask(const bool *selection, int count) {
+    if (!selection || count <= 0) return;
+    
+    sqlite3 *db = db_get_handle();
+    if (!db) return;
+    
+    const char *sql = "DELETE FROM call_log WHERE timestamp=? AND number=?;";
+    sqlite3_stmt *stmt;
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) != SQLITE_OK) return;
+    
+    int deleted = 0;
+    // Note: g_history_count is static global in this file
+    extern const call_log_entry_t *history_get_at(int index); // Or access g_history direct since we are inside
+    // accessing g_history direct:
+    // static call_log_entry_t g_history[MAX_HISTORY];
+    
+    for (int i=0; i<count && i < MAX_HISTORY; i++) {
+        if (selection[i]) {
+            // We read from internal array which reflects current DB state (before deletions)
+            // Since we delete by ID/Timestamp, order doesn't matter provided g_history hasn't changed.
+            call_log_entry_t *e = &g_history[i]; 
+            sqlite3_bind_int64(stmt, 1, e->timestamp);
+            sqlite3_bind_text(stmt, 2, e->number, -1, SQLITE_STATIC);
+            sqlite3_step(stmt);
+            sqlite3_reset(stmt);
+            deleted++;
+        }
+    }
+    sqlite3_finalize(stmt);
+    
+    if (deleted > 0) {
+        history_load();
+    }
+}
