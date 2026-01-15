@@ -127,7 +127,7 @@ static int evdev_ver_max = EVDEV_VER_MAX;
  * @return true: the device file set complete
  *         false: the device file doesn't exist current system
  */
-bool evdev_set_file(char* dev_name)
+bool evdev_set_file(const char* dev_name)
 { 
      if(evdev_fd != -1) {
         close(evdev_fd);

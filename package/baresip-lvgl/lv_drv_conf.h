@@ -15,16 +15,24 @@
 /*-------------------
  *  SDL
  *-------------------*/
+/*-------------------
+ *  SDL
+ *-------------------*/
 #ifndef USE_SDL
-#  define USE_SDL         0
+#  define USE_SDL         1
 #endif
 
+#if USE_SDL
+#  define SDL_HOR_RES     800
+#  define SDL_VER_RES     600
+#  define SDL_ZOOM        1
+#endif
 
 /*-------------------
  *  Linux frame buffer device (/dev/fbx)
  *-------------------*/
 #ifndef USE_FBDEV
-#  define USE_FBDEV           1
+#  define USE_FBDEV           0
 #endif
 
 #if USE_FBDEV
@@ -39,14 +47,14 @@
  *  SDL
  *-------------------*/
 #ifndef USE_SDL
-#  define USE_SDL         0
+#  define USE_SDL         1
 #endif
 
 /*-------------------
  *  EVDEV
  *-------------------*/
 #ifndef USE_EVDEV
-#  define USE_EVDEV           1
+#  define USE_EVDEV           0
 #endif
 
 #if USE_EVDEV

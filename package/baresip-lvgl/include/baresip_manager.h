@@ -24,12 +24,12 @@ typedef enum {
 
 // Call Info Struct
 typedef struct {
-    char id[64];
+    void *id; // opaque pointer to struct call
     char peer_uri[128];
     enum call_state state;
     bool is_current;
     bool is_held;
-    void *call_ptr;
+    bool has_video; // Thread-safe video state
 } call_info_t;
 
 // Callbacks
@@ -51,7 +51,10 @@ int baresip_manager_reject_call(void *call_ptr);
 int baresip_manager_hangup(void);
 int baresip_manager_hold_call(void *call_id);
 int baresip_manager_resume_call(void *call_id);
-int baresip_manager_switch_to(const char *call_id);
+int baresip_manager_switch_to(void *call_id);
+
+// Helper to check if a call has video
+bool baresip_manager_call_has_video(void *call_ptr);
 int baresip_manager_send_dtmf(char key);
 int baresip_manager_get_active_calls(call_info_t *calls, int max_count);
 
@@ -68,6 +71,7 @@ int baresip_manager_account_register(const char *aor);
 int baresip_manager_account_register_simple(const char *user, const char *domain);
 int baresip_manager_add_account(const voip_account_t *acc);
 reg_status_t baresip_manager_get_account_status(const char *aor);
+reg_status_t baresip_manager_get_account_status_simple(const char *user, const char *domain);
 
 void baresip_manager_set_callback(call_event_cb cb);
 void baresip_manager_set_reg_callback(reg_event_cb cb);

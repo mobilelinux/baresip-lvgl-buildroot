@@ -5,8 +5,7 @@
 
 case "$1" in
   start)
-	echo "Starting baresip-lvgl..."
-	
+	printf "Starting baresip-lvgl: "
 	# Wait for network (eth0) to be ready to avoid binding to loopback/invalid contact
 	count=0
 	echo "Waiting for eth0 IP..."

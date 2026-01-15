@@ -3,6 +3,11 @@
 
 #include <stdio.h>
 #include <string.h>
+#include <inttypes.h>
+#include <stdbool.h>
+#include <stdint.h>
+#include <sys/types.h>
+#include <re.h>
 #include <baresip.h>
 
 // Use baresip's log level enum

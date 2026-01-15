@@ -14,16 +14,14 @@ BARESIP_LVGL_DEPENDENCIES = openssl zlib opus sqlite ffmpeg
 # GIT_SUBMODULES disabled because .gitmodules is missing/broken in the repo.
 # We must manually fetch dependencies (re, rem, baresip) into deps/
 define BARESIP_LVGL_PREPARE_SOURCE
-	rm -rf $(@D)/deps/baresip $(@D)/deps/re $(@D)/deps/rem $(@D)/lvgl $(@D)/lv_drivers
-	git clone --depth 1 --branch v2.12.0 https://github.com/baresip/baresip.git $(@D)/deps/baresip
-	git clone --depth 1 --branch v2.12.0 https://github.com/baresip/re.git $(@D)/deps/re
-	git clone --depth 1 --branch v2.12.0 https://github.com/baresip/rem.git $(@D)/deps/rem
+	# rm -rf $(@D)/deps/baresip $(@D)/deps/re $(@D)/deps/rem $(@D)/lvgl $(@D)/lv_drivers
+	test -d $(@D)/deps/baresip || git clone --depth 1 --branch v4.4.0 https://github.com/baresip/baresip.git $(@D)/deps/baresip
+	test -d $(@D)/deps/re || git clone --depth 1 --branch v4.4.0 https://github.com/baresip/re.git $(@D)/deps/re
+	# rem clone removed (merged into re)
 	# git clone --depth 1 --branch v8.3.11 https://github.com/lvgl/lvgl.git $(@D)/lvgl
 	mkdir -p $(@D)/lvgl
-	wget -O $(@D)/lvgl.tar.gz https://github.com/lvgl/lvgl/archive/refs/tags/v8.3.11.tar.gz
-	tar -xzf $(@D)/lvgl.tar.gz -C $(@D)/lvgl --strip-components=1
-	rm $(@D)/lvgl.tar.gz
-	git clone --depth 1 --branch v8.3.0 https://github.com/lvgl/lv_drivers.git $(@D)/lv_drivers
+	test -f $(@D)/lvgl/README.md || (wget -O $(@D)/lvgl.tar.gz https://github.com/lvgl/lvgl/archive/refs/tags/v8.3.11.tar.gz && tar -xzf $(@D)/lvgl.tar.gz -C $(@D)/lvgl --strip-components=1 && rm $(@D)/lvgl.tar.gz)
+	test -d $(@D)/lv_drivers || git clone --depth 1 --branch v8.3.0 https://github.com/lvgl/lv_drivers.git $(@D)/lv_drivers
 	
 	# Configure lv_drivers for FBDEV
 	cp package/baresip-lvgl/lv_drv_conf.h $(@D)/lv_drivers/lv_drv_conf.h
@@ -49,13 +47,12 @@ define BARESIP_LVGL_PREPARE_SOURCE
 	cp package/baresip-lvgl/fake_sdl/SDL.h $(@D)/include/SDL.h
 
 	# Patch dependencies to bypass find_package
-	sed -i 's/find_package(RE/# find_package(RE/g' $(@D)/deps/rem/CMakeLists.txt
-	sed -i 's/find_package(re/# find_package(re/g' $(@D)/deps/rem/CMakeLists.txt
+	# sed -i 's/find_package(RE/# find_package(RE/g' $(@D)/deps/rem/CMakeLists.txt
+	# sed -i 's/find_package(re/# find_package(re/g' $(@D)/deps/rem/CMakeLists.txt
 	sed -i 's/find_package(RE/# find_package(RE/g' $(@D)/deps/baresip/CMakeLists.txt
 	sed -i 's/find_package(re/# find_package(re/g' $(@D)/deps/baresip/CMakeLists.txt
-	sed -i 's/find_package(REM/# find_package(REM/g' $(@D)/deps/baresip/CMakeLists.txt
-	sed -i 's/find_package(REM/# find_package(REM/g' $(@D)/deps/baresip/CMakeLists.txt
-	sed -i 's/find_package(rem/# find_package(rem/g' $(@D)/deps/baresip/CMakeLists.txt
+	# sed -i 's/find_package(REM/# find_package(REM/g' $(@D)/deps/baresip/CMakeLists.txt
+	# sed -i 's/find_package(rem/# find_package(rem/g' $(@D)/deps/baresip/CMakeLists.txt
 	
 	# Force disable SDL2 variables (We use fake_sdl)
 	sed -i '1i set(SDL2_FOUND FALSE CACHE BOOL "Force Disable" FORCE)' $(@D)/deps/baresip/CMakeLists.txt
@@ -67,15 +64,18 @@ define BARESIP_LVGL_PREPARE_SOURCE
 	
 	# Fix implicit declaration in conf.c
 	sed -i '1i #include <unistd.h>' $(@D)/deps/baresip/src/conf.c
+	sed -i '1i #include <unistd.h>' $(@D)/deps/baresip/modules/uuid/uuid.c
 
 	# Fix baresip.h missing includes (critical for v2.12.0)
-	sed -i '1i #include <stdint.h>\n#include <stddef.h>\n#include <re.h>' $(@D)/deps/baresip/include/baresip.h
+	# sed -i '1i #include <stdint.h>\n#include <stddef.h>\n#include <re.h>' $(@D)/deps/baresip/include/baresip.h
 	
 	# Force disable tests in baresip/CMakeLists.txt (Fixes mod_table link error)
 	sed -i 's/add_subdirectory(test)/# add_subdirectory(test)/g' $(@D)/deps/baresip/CMakeLists.txt
 	
 	# Replace evdev.c with custom auto-detection version
 	cp package/baresip-lvgl/evdev.c $(@D)/lv_drivers/indev/evdev.c
+	cp package/baresip-lvgl/evdev_kb.c $(@D)/lv_drivers/indev/evdev_kb.c
+	cp package/baresip-lvgl/evdev_kb.h $(@D)/lv_drivers/indev/evdev_kb.h
 endef
 
 BARESIP_LVGL_POST_RSYNC_HOOKS += BARESIP_LVGL_PREPARE_SOURCE
