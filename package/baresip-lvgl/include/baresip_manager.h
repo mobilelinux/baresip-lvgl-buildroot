@@ -1,96 +1,82 @@
 #ifndef BARESIP_MANAGER_H
 #define BARESIP_MANAGER_H
 
+#include <inttypes.h>
 #include <stdbool.h>
+#include <stdint.h>
+#include <sys/types.h>
 #include <re.h>
 #include <baresip.h>
-#include "lvgl.h"
-#include "logger.h"
-
-// Registration Status
-typedef enum {
-    REG_STATUS_NONE,
-    REG_STATUS_REGISTERING,
-    REG_STATUS_REGISTERED,
-    REG_STATUS_AUTH_FAILED, // Added
-    REG_STATUS_FAILED
-} reg_status_t;
-
-// Call Type for History
-// Call Type for History moved to history_manager.h
-
-
 #include "config_manager.h"
 
-// Call Info Struct
-typedef struct {
-    void *id; // opaque pointer to struct call
-    char peer_uri[128];
-    enum call_state state;
-    bool is_current;
-    bool is_held;
-    bool has_video; // Thread-safe video state
-} call_info_t;
+#define MAX_CALLS 8
 
-// Callbacks
-typedef void (*call_event_cb)(enum call_state state, const char *peer_uri, void *call_ptr);
+typedef enum {
+  REG_STATUS_NONE = 0,
+  REG_STATUS_REGISTERING,
+  REG_STATUS_REGISTERED,
+  REG_STATUS_FAILED,
+  REG_STATUS_AUTH_FAILED
+} reg_status_t;
+
+typedef void (*call_event_cb)(enum call_state state, const char *peer_uri,
+                              void *call_id);
 typedef void (*reg_event_cb)(const char *aor, reg_status_t status);
-typedef void (*message_event_cb)(const char *peer_uri, const char *msg);
+typedef void (*message_event_cb)(const char *peer_uri, const char *text);
 
-// Functions
 int baresip_manager_init(void);
-void baresip_manager_loop(void (*ui_cb)(void), int interval_ms);
-int baresip_manager_connect(const char *uri, const char *account_aor, bool video);
+// Replaces set_callback
+void baresip_manager_add_listener(call_event_cb cb);
+void baresip_manager_set_callback(call_event_cb cb); // Deprecated but kept for compat
+
+void baresip_manager_set_reg_callback(reg_event_cb cb);
+void baresip_manager_set_message_callback(message_event_cb cb);
+reg_status_t baresip_manager_get_account_status(const char *aor);
 int baresip_manager_call(const char *uri);
 int baresip_manager_call_with_account(const char *uri, const char *account_aor);
 int baresip_manager_videocall(const char *uri);
-int baresip_manager_videocall_with_account(const char *uri, const char *account_aor);
-
+int baresip_manager_videocall_with_account(const char *uri,
+                                           const char *account_aor);
 int baresip_manager_answer_call(bool video);
 int baresip_manager_reject_call(void *call_ptr);
 int baresip_manager_hangup(void);
-int baresip_manager_hold_call(void *call_id);
-int baresip_manager_resume_call(void *call_id);
-int baresip_manager_switch_to(void *call_id);
-
-// Helper to check if a call has video
-bool baresip_manager_call_has_video(void *call_ptr);
 int baresip_manager_send_dtmf(char key);
-int baresip_manager_get_active_calls(call_info_t *calls, int max_count);
-
-void baresip_manager_mute(bool mute);
-bool baresip_manager_is_muted(void);
-
-// SIP Messaging
-int baresip_manager_send_message(const char *uri, const char *text);
-
+int baresip_manager_transfer(const char *target);
 enum call_state baresip_manager_get_state(void);
 const char *baresip_manager_get_peer(void);
-
+void baresip_manager_mute(bool mute);
+bool baresip_manager_is_muted(void);
+int baresip_manager_add_account(const voip_account_t *account);
 int baresip_manager_account_register(const char *aor);
 int baresip_manager_account_register_simple(const char *user, const char *domain);
-int baresip_manager_add_account(const voip_account_t *acc);
-reg_status_t baresip_manager_get_account_status(const char *aor);
-reg_status_t baresip_manager_get_account_status_simple(const char *user, const char *domain);
+int baresip_manager_send_message(const char *peer_uri, const char *text);
+void baresip_manager_get_current_call_display_name(char *out_buf, size_t size);
+void baresip_manager_set_video_objects(void *remote_obj, void *local_obj);
+void baresip_manager_destroy(void);
 
-void baresip_manager_set_callback(call_event_cb cb);
-void baresip_manager_set_reg_callback(reg_event_cb cb);
-void baresip_manager_set_message_callback(message_event_cb cb);
-void baresip_manager_set_log_level(int level);
+/**
+ * Run the Baresip main loop (re_main)
+ * @param ui_loop_cb Callback to run periodically (e.g. for LVGL)
+ * @param interval_ms Interval in milliseconds for the callback
+ */
+void baresip_manager_loop(void (*ui_loop_cb)(void), int interval_ms);
 
-// Video
-void baresip_manager_set_video_objects(lv_obj_t *remote, lv_obj_t *local);
+typedef struct {
+  void *id; // opaque pointer to struct call
+  char peer_uri[256];
+  enum call_state state;
+  bool is_held;
+  bool is_current;
+} call_info_t;
+
+int baresip_manager_get_active_calls(call_info_t *calls, int max_count);
+int baresip_manager_switch_to(void *call_id);
+int baresip_manager_hold_call(void *call_id);
+int baresip_manager_resume_call(void *call_id);
+// Video Display
+#include "logger.h"
 void baresip_manager_set_video_rect(int x, int y, int w, int h);
 void baresip_manager_set_local_video_rect(int x, int y, int w, int h);
-
-// Account Management
-void baresip_manager_set_current_account(int account_index);
-void baresip_manager_process_video(void);
-
-// Helper to get peer name with priority: Contact > Display Name > URI
-void baresip_manager_get_peer_display_name(struct call *call, const char *peer_uri, char *out_buf, size_t size);
-
-// Helper to get peer name for current active call
-void baresip_manager_get_current_call_display_name(char *out_buf, size_t size);
+void baresip_manager_set_log_level(log_level_t level);
 
 #endif // BARESIP_MANAGER_H

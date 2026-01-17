@@ -278,11 +278,24 @@ static void search_and_add_to_group(lv_obj_t * parent, lv_group_t * group) {
 }
 
 // Gesture Handler for Swipe Up
+// Gesture Handler for Swipe Up
 static void call_gesture_handler(lv_event_t *e) {
-    lv_dir_t dir = lv_indev_get_gesture_dir(lv_indev_get_act());
-    if (dir == LV_DIR_TOP) {
-        log_info("CallApplet", "Swipe Up Detected - Going Back/Home");
-        applet_manager_back();
+    lv_event_code_t code = lv_event_get_code(e);
+    lv_obj_t *target = lv_event_get_target(e);
+    
+    // Log incidence of gesture execution
+    if (code == LV_EVENT_PRESSED) {
+        log_info("CallApplet", "Touch/Click Detected on %p", target);
+    }
+
+    if (code == LV_EVENT_GESTURE) {
+        lv_dir_t dir = lv_indev_get_gesture_dir(lv_indev_get_act());
+        log_info("CallApplet", "Gesture Detected. Direction: %d (Top=%d)", dir, LV_DIR_TOP);
+                 
+        if (dir == LV_DIR_TOP) {
+            log_info("CallApplet", "Swipe Up CONFIRMED - Going Back/Home");
+            applet_manager_back();
+        }
     }
 }
 
@@ -485,6 +498,11 @@ static void show_incoming_call_screen(call_data_t *data, const char *number) {
     if (data->incoming_name_label) lv_label_set_text(data->incoming_name_label, final_name);
     if (data->incoming_number_label) lv_label_set_text(data->incoming_number_label, number);
     
+    // Enable Gesture for Swipe Up (Back/Home)
+    lv_obj_add_flag(data->incoming_call_screen, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_remove_event_cb(data->incoming_call_screen, call_gesture_handler); // Avoid duplicates
+    lv_obj_add_event_cb(data->incoming_call_screen, call_gesture_handler, LV_EVENT_GESTURE, NULL);
+
     lv_obj_move_foreground(data->incoming_call_screen);
 }
 
@@ -521,6 +539,224 @@ void format_sip_uri(const char *in, char *out, size_t out_size) {
   out[i] = '\0';
 }
 
+
+// --- DTMF DIALOG ---
+static lv_obj_t *g_dtmf_modal = NULL;
+static lv_obj_t *g_dtmf_ta = NULL;
+
+static void close_dtmf_dialog(void) {
+    if (g_dtmf_modal) {
+        lv_obj_del(g_dtmf_modal);
+        g_dtmf_modal = NULL;
+        g_dtmf_ta = NULL;
+    }
+}
+
+static void dtmf_cancel_clicked(lv_event_t *e) {
+    (void)e;
+    close_dtmf_dialog();
+}
+
+static void dtmf_pad_clicked(lv_event_t *e) {
+    const char *txt = lv_event_get_user_data(e);
+    if (g_dtmf_ta && txt && strlen(txt) > 0) {
+        lv_textarea_add_text(g_dtmf_ta, txt);
+        // Send DTMF immediately
+        baresip_manager_send_dtmf(txt[0]);
+    }
+}
+
+// Replaced show_dtmf_clicked with actual dialog
+void show_dtmf_clicked(lv_event_t *e) {
+    (void)e;
+    if (g_dtmf_modal) return;
+    
+    g_dtmf_modal = lv_obj_create(lv_layer_top());
+    lv_obj_set_size(g_dtmf_modal, LV_PCT(100), LV_PCT(100));
+    lv_obj_set_style_bg_color(g_dtmf_modal, lv_color_black(), 0);
+    lv_obj_set_style_bg_opa(g_dtmf_modal, LV_OPA_80, 0); 
+    lv_obj_set_flex_flow(g_dtmf_modal, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(g_dtmf_modal, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    
+    // Title
+    lv_obj_t *title = lv_label_create(g_dtmf_modal);
+    lv_label_set_text(title, "DTMF Keypad");
+    lv_obj_set_style_text_color(title, lv_color_white(), 0);
+    lv_obj_set_style_text_font(title, &lv_font_montserrat_24, 0);
+    
+    // Read-only Display
+    g_dtmf_ta = lv_textarea_create(g_dtmf_modal);
+    lv_textarea_set_one_line(g_dtmf_ta, true);
+    lv_obj_set_width(g_dtmf_ta, 240);
+    lv_obj_set_style_text_align(g_dtmf_ta, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_style_text_font(g_dtmf_ta, &lv_font_montserrat_24, 0);
+    lv_obj_clear_flag(g_dtmf_ta, LV_OBJ_FLAG_CLICKABLE); // Read only UI
+    
+    // Keypad (Copying layout logic, could share function but inline is fine for now)
+    lv_obj_t *pad = lv_obj_create(g_dtmf_modal);
+    lv_obj_set_size(pad, 260, 300);
+    lv_obj_set_style_bg_opa(pad, 0, 0);
+    lv_obj_set_style_border_width(pad, 0, 0);
+    lv_obj_set_flex_flow(pad, LV_FLEX_FLOW_ROW_WRAP);
+    lv_obj_set_flex_align(pad, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_gap(pad, 10, 0);
+    
+    const char *keys[] = {"1", "2", "3", "4", "5", "6", "7", "8", "9", "*", "0", "#"};
+    for(int i=0; i<12; i++) {
+        lv_obj_t *btn = lv_btn_create(pad);
+        lv_obj_set_size(btn, 60, 60);
+        lv_obj_set_style_radius(btn, 30, 0); 
+        lv_obj_set_style_bg_color(btn, lv_palette_main(LV_PALETTE_GREY), 0);
+        
+        lv_obj_t *lbl = lv_label_create(btn);
+        lv_label_set_text(lbl, keys[i]);
+        lv_obj_center(lbl);
+        lv_obj_set_style_text_font(lbl, &lv_font_montserrat_24, 0);
+        
+        lv_obj_add_event_cb(btn, dtmf_pad_clicked, LV_EVENT_CLICKED, (void*)keys[i]);
+    }
+    
+    // Close Button
+    lv_obj_t *btn_close = lv_btn_create(g_dtmf_modal);
+    lv_obj_set_size(btn_close, 120, 50);
+    lv_obj_set_style_bg_color(btn_close, lv_palette_main(LV_PALETTE_RED), 0);
+    lv_obj_t *lbl_close = lv_label_create(btn_close);
+    lv_label_set_text(lbl_close, "Close");
+    lv_obj_center(lbl_close);
+    lv_obj_add_event_cb(btn_close, dtmf_cancel_clicked, LV_EVENT_CLICKED, NULL);
+}
+
+// --- TRANSFER DIALOG ---
+static lv_obj_t *g_transfer_modal = NULL;
+static lv_obj_t *g_transfer_ta = NULL;
+
+static void close_transfer_dialog(void) {
+    if (g_transfer_modal) {
+        lv_obj_del(g_transfer_modal);
+        g_transfer_modal = NULL;
+        g_transfer_ta = NULL;
+    }
+}
+
+static void transfer_cancel_clicked(lv_event_t *e) {
+    (void)e;
+    close_transfer_dialog();
+}
+
+static void transfer_call_clicked(lv_event_t *e) {
+    (void)e;
+    if (g_transfer_ta) {
+        const char *number = lv_textarea_get_text(g_transfer_ta);
+        if (number && strlen(number) > 0) {
+            baresip_manager_transfer(number);
+            close_transfer_dialog();
+            applet_manager_show_toast("Transferring...");
+        }
+    }
+}
+
+static void transfer_pad_clicked(lv_event_t *e) {
+    const char *txt = lv_event_get_user_data(e);
+    if (g_transfer_ta && txt) {
+        lv_textarea_add_text(g_transfer_ta, txt);
+    }
+}
+
+static void transfer_backspace_clicked(lv_event_t *e) {
+    (void)e;
+    if (g_transfer_ta) {
+        lv_textarea_del_char(g_transfer_ta);
+    }
+}
+
+static void show_transfer_dialog(lv_event_t *e) {
+    (void)e;
+    if (g_transfer_modal) return;
+    
+    // Modal Overlay
+    g_transfer_modal = lv_obj_create(lv_layer_top());
+    lv_obj_set_size(g_transfer_modal, LV_PCT(100), LV_PCT(100));
+    lv_obj_set_style_bg_color(g_transfer_modal, lv_color_black(), 0);
+    lv_obj_set_style_bg_opa(g_transfer_modal, LV_OPA_80, 0); // Dimmed background
+    lv_obj_set_flex_flow(g_transfer_modal, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(g_transfer_modal, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    
+    // Title
+    lv_obj_t *title = lv_label_create(g_transfer_modal);
+    lv_label_set_text(title, "Forward Call");
+    lv_obj_set_style_text_color(title, lv_color_white(), 0);
+    lv_obj_set_style_text_font(title, &lv_font_montserrat_24, 0);
+    
+    // Display (TextArea)
+    g_transfer_ta = lv_textarea_create(g_transfer_modal);
+    lv_textarea_set_one_line(g_transfer_ta, true);
+    lv_textarea_set_max_length(g_transfer_ta, 32);
+    lv_obj_set_width(g_transfer_ta, 240);
+    lv_obj_set_style_text_align(g_transfer_ta, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_style_text_font(g_transfer_ta, &lv_font_montserrat_24, 0);
+    
+    // Keypad Container
+    lv_obj_t *pad = lv_obj_create(g_transfer_modal);
+    lv_obj_set_size(pad, 260, 300);
+    lv_obj_set_style_bg_opa(pad, 0, 0);
+    lv_obj_set_style_border_width(pad, 0, 0);
+    lv_obj_set_flex_flow(pad, LV_FLEX_FLOW_ROW_WRAP);
+    lv_obj_set_flex_align(pad, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_gap(pad, 10, 0);
+    
+    const char *keys[] = {"1", "2", "3", "4", "5", "6", "7", "8", "9", "*", "0", "#"};
+    for(int i=0; i<12; i++) {
+        lv_obj_t *btn = lv_btn_create(pad);
+        lv_obj_set_size(btn, 60, 60);
+        lv_obj_set_style_radius(btn, 30, 0); // Circle
+        lv_obj_set_style_bg_color(btn, lv_palette_main(LV_PALETTE_GREY), 0);
+        
+        lv_obj_t *lbl = lv_label_create(btn);
+        lv_label_set_text(lbl, keys[i]);
+        lv_obj_center(lbl);
+        lv_obj_set_style_text_font(lbl, &lv_font_montserrat_24, 0);
+        
+        lv_obj_add_event_cb(btn, transfer_pad_clicked, LV_EVENT_CLICKED, (void*)keys[i]);
+    }
+    
+    // Action Row
+    lv_obj_t *actions = lv_obj_create(g_transfer_modal);
+    lv_obj_set_size(actions, 280, 80);
+    lv_obj_set_style_bg_opa(actions, 0, 0);
+    lv_obj_set_style_border_width(actions, 0, 0);
+    lv_obj_set_flex_flow(actions, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(actions, LV_FLEX_ALIGN_SPACE_EVENLY, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    
+    // Cancel
+    lv_obj_t *btn_cancel = lv_btn_create(actions);
+    lv_obj_set_size(btn_cancel, 60, 60);
+    lv_obj_set_style_bg_color(btn_cancel, lv_palette_main(LV_PALETTE_RED), 0);
+    lv_obj_set_style_radius(btn_cancel, 30, 0);
+    lv_obj_t *lbl_cancel = lv_label_create(btn_cancel);
+    lv_label_set_text(lbl_cancel, LV_SYMBOL_CLOSE);
+    lv_obj_center(lbl_cancel);
+    lv_obj_add_event_cb(btn_cancel, transfer_cancel_clicked, LV_EVENT_CLICKED, NULL);
+
+    // Backspace (Middle)
+    lv_obj_t *btn_bksp = lv_btn_create(actions);
+    lv_obj_set_size(btn_bksp, 60, 60);
+    lv_obj_set_style_bg_color(btn_bksp, lv_palette_main(LV_PALETTE_ORANGE), 0);
+    lv_obj_set_style_radius(btn_bksp, 30, 0);
+    lv_obj_t *lbl_bksp = lv_label_create(btn_bksp);
+    lv_label_set_text(lbl_bksp, LV_SYMBOL_BACKSPACE);
+    lv_obj_center(lbl_bksp);
+    lv_obj_add_event_cb(btn_bksp, transfer_backspace_clicked, LV_EVENT_CLICKED, NULL);
+    
+    // Call (Right)
+    lv_obj_t *btn_call = lv_btn_create(actions);
+    lv_obj_set_size(btn_call, 60, 60);
+    lv_obj_set_style_bg_color(btn_call, lv_palette_main(LV_PALETTE_GREEN), 0);
+    lv_obj_set_style_radius(btn_call, 30, 0);
+    lv_obj_t *lbl_call = lv_label_create(btn_call);
+    lv_label_set_text(lbl_call, LV_SYMBOL_CALL);
+    lv_obj_center(lbl_call);
+    lv_obj_add_event_cb(btn_call, transfer_call_clicked, LV_EVENT_CLICKED, NULL);
+}
 
 static void show_active_call_screen(call_data_t *data, const char *number) {
   lv_obj_add_flag(data->dialer_screen, LV_OBJ_FLAG_HIDDEN);
@@ -1100,8 +1336,9 @@ void update_call_duration(lv_timer_t *timer) {
 
   // Poll active calls to detect silent
   // termination
-  call_info_t calls[4];
-  int raw_count = baresip_manager_get_active_calls(calls, 4);
+  call_info_t calls[MAX_CALLS];
+  int raw_count = baresip_manager_get_active_calls(calls, MAX_CALLS);
+
   int valid_count = 0;
   for (int i = 0; i < raw_count; i++) {
     if (calls[i].state != CALL_STATE_TERMINATED &&
@@ -1158,47 +1395,13 @@ void update_account_dropdowns(call_data_t *data) {
   }
 }
 
-// Helper to draw an incoming call card
-void show_dtmf_clicked(lv_event_t *e) {
-  void *call_id = lv_event_get_user_data(e);
-  if (call_id) {
-    baresip_manager_switch_to(call_id);
-    // Fetch data to update list
-    applet_t *applet = applet_manager_get_applet("Call");
-    if (applet && applet->user_data) {
-         update_call_list((call_data_t*)applet->user_data, NULL);
-    }
-  }
-}
+
 
 static void call_list_item_clicked(lv_event_t *e) {
   void *call_id = lv_event_get_user_data(e);
   if (call_id) {
+    // Only switch backend state. The listener `on_call_state_change` will handle UI updates.
     baresip_manager_switch_to(call_id);
-    // Fetch data to update list
-    applet_t *applet = applet_manager_get_applet("Call");
-    if (applet && applet->user_data) {
-         call_data_t *data = (call_data_t*)applet->user_data;
-         
-         // Fix: Fetch fresh state from backend! 
-         // 'baresip_manager_switch_to' updates global state, but 'data->current_state' 
-         // might be stale until next poll/event.
-         data->current_state = baresip_manager_get_state();
-         const char *peer = baresip_manager_get_peer();
-         if (peer) {
-             strncpy(data->current_peer_uri, peer, sizeof(data->current_peer_uri)-1);
-             data->current_peer_uri[sizeof(data->current_peer_uri)-1] = '\0';
-         }
-
-         update_call_list(data, NULL);
-
-         // Force Main View Refresh
-         if (data->current_state == CALL_STATE_INCOMING) {
-             show_incoming_call_screen(data, peer);
-         } else {
-             show_active_call_screen(data, peer);
-         }
-    }
   }
 }
 
@@ -1245,16 +1448,16 @@ static void update_call_list(call_data_t *data, void *ignore_id) {
   if (!data || !data->active_call_screen)
     return;
 
-  call_info_t calls[8];
-  int raw_count = baresip_manager_get_active_calls(calls, 8);
-  log_info("CallApplet", "Update Call List: RawCount=%d", raw_count);
+  // FIX: Use MAX_CALLS instead of hardcoded 8 
+  call_info_t calls[MAX_CALLS];
+  int active_count = baresip_manager_get_active_calls(calls, MAX_CALLS);
+  log_info("CallApplet", "Update Call List: ActiveCount=%d", active_count);
 
   // Filter out ignored call and calls not matching the current View Mode
   int count = 0;
-  call_info_t valid_calls[8];
+  call_info_t valid_calls[MAX_CALLS];
 
-
-  for (int i = 0; i < raw_count; i++) {
+  for (int i = 0; i < active_count; i++) {
     if (ignore_id && calls[i].id == ignore_id)
       continue;
 
@@ -1724,8 +1927,8 @@ void check_ui_updates(lv_timer_t *t) {
        // Check if truly no calls (to handle multi-call scenarios)
        // Check if truly no calls (to handle multi-call scenarios)
        // Fix: Ignore TERMINATED calls that might still linger in core
-       call_info_t calls[4];
-       int count = baresip_manager_get_active_calls(calls, 4);
+       call_info_t calls[MAX_CALLS];
+       int count = baresip_manager_get_active_calls(calls, MAX_CALLS);
        bool has_active = false;
        for (int i=0; i<count; i++) {
            if (calls[i].state != CALL_STATE_TERMINATED && 
@@ -1783,10 +1986,8 @@ void check_ui_updates(lv_timer_t *t) {
 
     show_active_call_screen(data, peer);
 
-    // Update buttons based on state
-    if (data->mute_btn && data->speaker_btn) {
-      // (Optional) Update button states if needed
-    }
+    // Button updates moved to shared scope
+
 
   } else if (state == CALL_STATE_TERMINATED) {
     if (data->call_status_label)
@@ -1820,6 +2021,23 @@ void check_ui_updates(lv_timer_t *t) {
                                                      ? "Ringing..."
                                                      : "Connecting...");
     show_active_call_screen(data, peer);
+  }
+
+  // SHARED UI UPDATES (Run for all non-idle states)
+  if (data->mute_btn) {
+     bool is_muted = baresip_manager_is_muted();
+     lv_obj_t *lbl = lv_obj_get_child(data->mute_btn, 0);
+     if (is_muted) {
+         lv_label_set_text(lbl, "Mic"); 
+         lv_obj_add_state(data->mute_btn, LV_STATE_CHECKED); 
+         lv_obj_set_style_text_color(lbl, lv_palette_main(LV_PALETTE_RED), 0);
+         lv_obj_set_style_text_decor(lbl, LV_TEXT_DECOR_STRIKETHROUGH, 0);
+     } else {
+         lv_label_set_text(lbl, "Mic"); 
+         lv_obj_clear_state(data->mute_btn, LV_STATE_CHECKED);
+         lv_obj_set_style_text_color(lbl, lv_color_black(), 0);
+         lv_obj_set_style_text_decor(lbl, LV_TEXT_DECOR_NONE, 0);
+     }
   }
 }
 
@@ -1875,12 +2093,26 @@ void on_call_state_change(enum call_state state, const char *peer_uri, void *cal
   g_call_data->ui_update_needed = true;
 
   // Force applet switch if Incoming or Established
-  if (state == CALL_STATE_INCOMING) {
-    call_applet_request_incoming_view();
-    lv_async_call(launch_call_applet_async, NULL);
-  } else if (state == CALL_STATE_ESTABLISHED) {
-    call_applet_request_active_view();
-    lv_async_call(launch_call_applet_async, NULL);
+  // Force applet switch if Incoming or Established
+  // ONLY if not already in Call applet
+  applet_t *curr = applet_manager_get_current();
+  bool already_active = (curr && strcmp(curr->name, "Call") == 0);
+
+  if (!already_active) {
+      if (state == CALL_STATE_INCOMING) {
+        call_applet_request_incoming_view();
+        lv_async_call(launch_call_applet_async, NULL);
+      } else if (state == CALL_STATE_ESTABLISHED) {
+        call_applet_request_active_view();
+        lv_async_call(launch_call_applet_async, NULL);
+      }
+  } else {
+       // Just ensure view mode is correct without re-launching
+       if (state == CALL_STATE_INCOMING) {
+           call_applet_request_incoming_view();
+       } else if (state == CALL_STATE_ESTABLISHED) {
+           call_applet_request_active_view();
+       }
   }
 }
 
@@ -1964,8 +2196,12 @@ int call_init(applet_t *applet) {
   lv_obj_set_size(data->active_call_screen, LV_PCT(100), LV_PCT(100)); 
   lv_obj_add_flag(data->active_call_screen, LV_OBJ_FLAG_GESTURE_BUBBLE);
   lv_obj_add_flag(data->active_call_screen, LV_OBJ_FLAG_HIDDEN);
-  lv_obj_add_event_cb(data->active_call_screen, active_call_gesture_handler, LV_EVENT_GESTURE, NULL);
+  lv_obj_add_flag(data->active_call_screen, LV_OBJ_FLAG_HIDDEN);
+  // Use generic call_gesture_handler instead of active_call_gesture_handler
+  lv_obj_add_event_cb(data->active_call_screen, call_gesture_handler, LV_EVENT_GESTURE, NULL);
   lv_obj_set_style_bg_opa(data->active_call_screen, 0, 0); // Transparent background
+  lv_obj_clear_flag(data->active_call_screen, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_set_scrollbar_mode(data->active_call_screen, LV_SCROLLBAR_MODE_OFF);
 
   data->incoming_call_screen = lv_obj_create(applet->screen);
   lv_obj_set_size(data->incoming_call_screen, LV_PCT(100), LV_PCT(100));
@@ -2096,13 +2332,20 @@ int call_init(applet_t *applet) {
   lv_obj_set_style_border_width(active_call_cont, 0, 0); // No border
   lv_obj_clear_flag(active_call_cont, LV_OBJ_FLAG_SCROLLABLE);
   lv_obj_add_flag(active_call_cont, LV_OBJ_FLAG_GESTURE_BUBBLE); // Enable bubbling for gestures
+  lv_obj_add_flag(active_call_cont, LV_OBJ_FLAG_GESTURE_BUBBLE); // Enable bubbling for gestures
   lv_obj_add_flag(active_call_cont, LV_OBJ_FLAG_CLICKABLE); // Enable input handling
-
-
+  lv_obj_add_event_cb(active_call_cont, call_gesture_handler, LV_EVENT_GESTURE, NULL); // Catch it here too
+  lv_obj_add_event_cb(active_call_cont, call_gesture_handler, LV_EVENT_PRESSED, NULL); // Debug Press
 
   // Ensure root applet screen is OPAQUE WHITE to match other screens
   lv_obj_set_style_bg_color(applet->screen, lv_color_white(), 0);
   lv_obj_set_style_bg_opa(applet->screen, LV_OPA_COVER, 0);
+  
+  // FAILSAFE: Attach handler to root screen
+  lv_obj_add_flag(applet->screen, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_add_flag(applet->screen, LV_OBJ_FLAG_GESTURE_BUBBLE);
+  lv_obj_add_event_cb(applet->screen, call_gesture_handler, LV_EVENT_GESTURE, NULL);
+  lv_obj_add_event_cb(applet->screen, call_gesture_handler, LV_EVENT_PRESSED, NULL);
 
   // Back button removed from Active Call screen (Gesture only)
 
@@ -2114,10 +2357,9 @@ int call_init(applet_t *applet) {
   // User asked for white. Let's make it transparent so it inherits white.
   lv_obj_set_style_bg_opa(data->call_list_cont, LV_OPA_TRANSP, 0);
   // Add a border separator
+  // No border, No scrollbar
   lv_obj_set_style_border_width(data->call_list_cont, 0, 0);
-  lv_obj_set_style_border_side(data->call_list_cont, LV_BORDER_SIDE_RIGHT, 0);
-  lv_obj_set_style_border_width(data->call_list_cont, 1, 0);
-  lv_obj_set_style_border_color(data->call_list_cont, lv_palette_main(LV_PALETTE_GREY), 0);
+  lv_obj_set_scrollbar_mode(data->call_list_cont, LV_SCROLLBAR_MODE_OFF);
   
   lv_obj_set_flex_flow(data->call_list_cont, LV_FLEX_FLOW_COLUMN);
   lv_obj_set_style_pad_all(data->call_list_cont, 5, 0);
@@ -2137,6 +2379,7 @@ int call_init(applet_t *applet) {
   lv_obj_clear_flag(data->call_main_area, LV_OBJ_FLAG_SCROLLABLE);
   lv_obj_add_flag(data->call_main_area, LV_OBJ_FLAG_GESTURE_BUBBLE); // Enable bubbling
   lv_obj_add_flag(data->call_main_area, LV_OBJ_FLAG_CLICKABLE); // Enable input handling
+  lv_obj_add_event_cb(data->call_main_area, call_gesture_handler, LV_EVENT_GESTURE, NULL); // Catch it here too
 
 
 
@@ -2145,7 +2388,14 @@ int call_init(applet_t *applet) {
   lv_obj_remove_style_all(data->video_cont);
   lv_obj_set_size(data->video_cont, 800, 480);
   lv_obj_set_pos(data->video_cont, 0, 0);
+  lv_obj_set_pos(data->video_cont, 0, 0);
   lv_obj_move_background(data->video_cont); // Ensure it is behind UI
+  
+  // Enable gestures on video container 
+  lv_obj_add_flag(data->video_cont, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_add_flag(data->video_cont, LV_OBJ_FLAG_GESTURE_BUBBLE);
+  lv_obj_add_event_cb(data->video_cont, call_gesture_handler, LV_EVENT_GESTURE, NULL);
+  lv_obj_add_event_cb(data->video_cont, call_gesture_handler, LV_EVENT_PRESSED, NULL);
 
   // Remote Video (Full container)
   data->video_remote = lv_img_create(data->video_cont);
@@ -2154,6 +2404,11 @@ int call_init(applet_t *applet) {
   lv_obj_set_pos(data->video_remote, 0, 0);
   lv_obj_add_flag(data->video_remote, LV_OBJ_FLAG_IGNORE_LAYOUT);
   lv_obj_clear_flag(data->video_remote, LV_OBJ_FLAG_SCROLLABLE);
+  
+  // Enable gestures on image itself (just in case)
+  lv_obj_add_flag(data->video_remote, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_add_flag(data->video_remote, LV_OBJ_FLAG_GESTURE_BUBBLE);
+
 
   // Local Video (PiP)
   data->video_local = lv_img_create(data->active_call_screen); // PiP on top
@@ -2177,8 +2432,15 @@ int call_init(applet_t *applet) {
                           0); // Transparent
   lv_obj_set_style_border_width(ui_layer, 0, 0);
   lv_obj_set_style_pad_all(ui_layer, 0, 0); // Remove default padding
+  lv_obj_set_style_pad_bottom(ui_layer, 50, 0); // 50px margin to bottom
   lv_obj_set_flex_flow(ui_layer, LV_FLEX_FLOW_COLUMN);
-  lv_obj_align(ui_layer, LV_ALIGN_CENTER, 0, 50); // Moved down by 50px
+  lv_obj_center(ui_layer); // Center in parent
+  // Fix: Disable scrolling and enable bubbling on UI layer
+  lv_obj_clear_flag(ui_layer, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_set_scrollbar_mode(ui_layer, LV_SCROLLBAR_MODE_OFF);
+  lv_obj_add_flag(ui_layer, LV_OBJ_FLAG_GESTURE_BUBBLE);
+  lv_obj_add_flag(ui_layer, LV_OBJ_FLAG_CLICKABLE); // Ensure it can bubble
+  lv_obj_add_event_cb(ui_layer, call_gesture_handler, LV_EVENT_GESTURE, NULL); // Direct attachment
 
   // Top Info (Call Status/Name)
   lv_obj_t *top_info = lv_obj_create(ui_layer);
@@ -2191,6 +2453,8 @@ int call_init(applet_t *applet) {
   lv_obj_set_flex_flow(top_info, LV_FLEX_FLOW_COLUMN);
   lv_obj_set_flex_align(top_info, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER,
                         LV_FLEX_ALIGN_CENTER);
+  lv_obj_add_flag(top_info, LV_OBJ_FLAG_GESTURE_BUBBLE); 
+  lv_obj_clear_flag(top_info, LV_OBJ_FLAG_SCROLLABLE);
 
   // ... (Labels inside top_info) ...
   data->call_name_label = lv_label_create(top_info);
@@ -2224,6 +2488,12 @@ int call_init(applet_t *applet) {
 
   // Video container and children removed from here (pushed to background layer)
 
+  // Spacer to push buttons to bottom
+  lv_obj_t *spacer = lv_obj_create(ui_layer);
+  lv_obj_set_flex_grow(spacer, 1);
+  lv_obj_set_style_bg_opa(spacer, 0, 0);
+  lv_obj_set_style_border_width(spacer, 0, 0);
+
   // Action Grid
   lv_obj_t *action_grid = lv_obj_create(ui_layer);
   lv_obj_set_size(action_grid, LV_PCT(90), 120);
@@ -2232,12 +2502,14 @@ int call_init(applet_t *applet) {
                         LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
   lv_obj_set_style_bg_opa(action_grid, 0, 0);
   lv_obj_set_style_border_width(action_grid, 0, 0);
+  lv_obj_add_flag(action_grid, LV_OBJ_FLAG_GESTURE_BUBBLE);
+  lv_obj_clear_flag(action_grid, LV_OBJ_FLAG_SCROLLABLE);
 
   data->mute_btn = lv_btn_create(action_grid);
   lv_obj_set_size(data->mute_btn, 60, 60);
   lv_obj_add_flag(data->mute_btn, LV_OBJ_FLAG_CHECKABLE);
   lv_obj_t *mute_lbl = lv_label_create(data->mute_btn);
-  lv_label_set_text(mute_lbl, LV_SYMBOL_MUTE);
+  lv_label_set_text(mute_lbl, "Mic");
   lv_obj_center(mute_lbl);
   lv_obj_add_event_cb(data->mute_btn, mute_btn_clicked, LV_EVENT_CLICKED, NULL);
 
@@ -2265,6 +2537,16 @@ int call_init(applet_t *applet) {
   lv_obj_center(hold_lbl);
   lv_obj_add_event_cb(data->hold_btn, hold_btn_clicked, LV_EVENT_CLICKED, NULL);
 
+  // Transfer Button
+  lv_obj_t *trans_btn = lv_btn_create(action_grid);
+  lv_obj_set_size(trans_btn, 60, 60);
+  lv_obj_t *trans_lbl = lv_label_create(trans_btn);
+  lv_label_set_text(trans_lbl, LV_SYMBOL_SHUFFLE); // Shuffle kind of looks like forward/transfer
+  lv_obj_center(trans_lbl);
+  lv_obj_add_event_cb(trans_btn, show_transfer_dialog, LV_EVENT_CLICKED, NULL);
+  // Duplicate Hold Code Removed
+  // data->hold_btn created above already
+  
   lv_obj_t *bottom_area = lv_obj_create(ui_layer); // Parent changed
   lv_obj_set_size(bottom_area, LV_PCT(100), 80);
   lv_obj_set_flex_flow(bottom_area, LV_FLEX_FLOW_ROW);
@@ -2273,6 +2555,8 @@ int call_init(applet_t *applet) {
   lv_obj_set_style_border_width(bottom_area, 0, 0);
   lv_obj_set_style_bg_opa(bottom_area, 0, 0); // Transparent
   lv_obj_clear_flag(bottom_area, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_set_scrollbar_mode(bottom_area, LV_SCROLLBAR_MODE_OFF);
+  lv_obj_add_flag(bottom_area, LV_OBJ_FLAG_GESTURE_BUBBLE);
 
   data->hangup_btn = lv_btn_create(bottom_area);
   lv_obj_set_size(data->hangup_btn, 70, 70);
@@ -2613,8 +2897,8 @@ static void call_start(applet_t *applet) {
     // Re-use logic for view mode processing (simplified duplication for now)
     // To ensure consistency, we should ideally call a helper, but for quick
     // fix: Process View Mode
-    call_info_t calls[8];
-    int count = baresip_manager_get_active_calls(calls, 8);
+    call_info_t calls[MAX_CALLS];
+    int count = baresip_manager_get_active_calls(calls, MAX_CALLS);
     int target_idx = -1;
 
     // Priority 1: Find Current Call matching the requested View Mode
@@ -2692,6 +2976,10 @@ static void call_pause(applet_t *applet) {
     lv_timer_pause(data->status_timer);
   if (data->video_timer)
     lv_timer_pause(data->video_timer);
+  if (data->ui_poller)
+    lv_timer_pause(data->ui_poller);
+  if (data->exit_timer)
+    lv_timer_pause(data->exit_timer);
 }
 
 static void call_resume(applet_t *applet) {
@@ -2702,6 +2990,10 @@ static void call_resume(applet_t *applet) {
     lv_timer_resume(data->status_timer);
   if (data->video_timer)
     lv_timer_resume(data->video_timer);
+  if (data->ui_poller)
+    lv_timer_resume(data->ui_poller);
+  if (data->exit_timer)
+    lv_timer_resume(data->exit_timer);
 
   // Sync state from Baresip Manager
   data->current_state = baresip_manager_get_state();
@@ -2733,8 +3025,8 @@ static void call_resume(applet_t *applet) {
     log_info("CallApplet", "Resume: Processing View Mode %d", g_req_view_mode);
 
     // Find appropriate call
-    call_info_t calls[8];
-    int count = baresip_manager_get_active_calls(calls, 8);
+    call_info_t calls[MAX_CALLS];
+    int count = baresip_manager_get_active_calls(calls, MAX_CALLS);
     int target_idx = -1;
 
     // 1. Prefer Current Call if it matches criteria

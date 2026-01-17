@@ -38,3 +38,17 @@ baresip-lvgl
 ```
 
 The application normally starts via init script `/etc/init.d/S99baresip-lvgl`.
+
+## System Architecture
+The application follows a modular "Manager-Applet" architecture ensuring separation of concerns between SIP logic, UI handling, and data persistence:
+
+- **AppletManager**: Controls the lifecycle, visibility, and switching of UI Applets (Home, Dialer, Call, etc.).
+- **BaresipManager**: Acts as the bridge between the Baresip core (SIP stack) and the LVGL UI, interacting via a thread-safe event queue.
+- **ConfigManager**: Manages application settings (SIP accounts, Audio, UI prefs) with persistence.
+- **DatabaseManager**: Handles SQLite operations for Contacts and Call History.
+
+## Development
+To rebuild the package individually within the Buildroot environment:
+```sh
+make baresip-lvgl-dirclean && make baresip-lvgl
+```
