@@ -1,3 +1,4 @@
+#include "../ui/ui_helpers.h"
 #include "applet.h"
 #include "applet_manager.h"
 #include "baresip_manager.h"
@@ -8,7 +9,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "../ui/ui_helpers.h"
 
 // UI State
 static bool is_editor_mode = false;
@@ -43,9 +43,6 @@ static bool g_preserve_view = false;
 
 // External API to open editor with number (for Call Log "Add To Contact")
 void contacts_applet_open_new(const char *number) {
-  if (!g_applet)
-    return; // Should not happen if applet manager handles init
-
   // Ensure we are initialized
   cm_init();
 
@@ -58,7 +55,10 @@ void contacts_applet_open_new(const char *number) {
     strncpy(current_edit_contact.number, number,
             sizeof(current_edit_contact.number) - 1);
   }
-  refresh_ui();
+
+  if (g_applet) {
+    refresh_ui();
+  }
 }
 
 // ... (omitted) ...
@@ -66,8 +66,9 @@ void contacts_applet_open_new(const char *number) {
 static int contacts_init(applet_t *applet) {
   log_info("ContactsApplet", "Initializing");
   g_applet = applet;
-  is_editor_mode = false;
-  g_preserve_view = false;
+  if (!g_preserve_view) {
+    is_editor_mode = false;
+  }
   refresh_ui();
   return 0;
 }
@@ -181,6 +182,13 @@ static void save_btn_clicked(lv_event_t *e) {
     cm_update(current_edit_contact.id, name, number, fav);
   }
 
+  if (g_return_to_caller) {
+    g_return_to_caller = false;
+    free(inputs);
+    applet_manager_back();
+    return;
+  }
+
   is_editor_mode = false;
   free(inputs);
   refresh_ui();
@@ -207,7 +215,10 @@ static void close_picker_modal(void) {
   }
 }
 
-static void account_picker_cancel(lv_event_t *e) { (void)e; close_picker_modal(); }
+static void account_picker_cancel(lv_event_t *e) {
+  (void)e;
+  close_picker_modal();
+}
 
 static void account_picker_item_clicked(lv_event_t *e) {
   const char *aor = (const char *)lv_event_get_user_data(e);
@@ -319,30 +330,33 @@ static void contact_item_clicked(lv_event_t *e) {
     g_long_press_handled = false;
     return;
   }
-  
+
   if (g_contacts_selection_mode) {
-      // Toggle Selection
-      // User data is contact pointer.
-      // We need index to update mask. 
-      // Re-architect: loop to find index or store index in draw.
-      // Let's store index in draw_list for the event handler.
-      // But we need contact pointer for other things?
-      // In selection mode, we only care about index.
-      // Let's assume user_data is index cast to void* IF in selection mode?
-      // No, mixed usage is dangerous.
-      // Let's find index by pointer?
-      const contact_t *c = (const contact_t *)lv_event_get_user_data(e);
-      int idx = -1;
-      int count = cm_get_count();
-      for(int i=0; i<count; i++) {
-          if (cm_get_at(i) == c) { idx = i; break; }
+    // Toggle Selection
+    // User data is contact pointer.
+    // We need index to update mask.
+    // Re-architect: loop to find index or store index in draw.
+    // Let's store index in draw_list for the event handler.
+    // But we need contact pointer for other things?
+    // In selection mode, we only care about index.
+    // Let's assume user_data is index cast to void* IF in selection mode?
+    // No, mixed usage is dangerous.
+    // Let's find index by pointer?
+    const contact_t *c = (const contact_t *)lv_event_get_user_data(e);
+    int idx = -1;
+    int count = cm_get_count();
+    for (int i = 0; i < count; i++) {
+      if (cm_get_at(i) == c) {
+        idx = i;
+        break;
       }
-      
-      if (idx >= 0 && idx < 200) {
-          g_contacts_selected_mask[idx] = !g_contacts_selected_mask[idx];
-          refresh_ui(); 
-      }
-      return;
+    }
+
+    if (idx >= 0 && idx < 200) {
+      g_contacts_selected_mask[idx] = !g_contacts_selected_mask[idx];
+      refresh_ui();
+    }
+    return;
   }
 
   const contact_t *c = (const contact_t *)lv_event_get_user_data(e);
@@ -425,29 +439,30 @@ static void contact_video_clicked(lv_event_t *e) {
 // ------------------- MULTI SELECT LOGIC -------------------
 
 static void contacts_toggle_edit_clicked(lv_event_t *e) {
-    (void)e;
-    g_contacts_selection_mode = !g_contacts_selection_mode;
-    if (g_contacts_selection_mode) {
-        memset(g_contacts_selected_mask, 0, sizeof(g_contacts_selected_mask));
-    }
-    refresh_ui();
+  (void)e;
+  g_contacts_selection_mode = !g_contacts_selection_mode;
+  if (g_contacts_selection_mode) {
+    memset(g_contacts_selected_mask, 0, sizeof(g_contacts_selected_mask));
+  }
+  refresh_ui();
 }
 
 static void contacts_delete_selected_clicked(lv_event_t *e) {
-    (void)e;
-    int count = cm_get_count();
-    // Delete from end to start to avoid index shifting issues?
-    // cm_remove removes by ID, so index shifting matters if we rely on indices.
-    // Better: Collect IDs to remove, then remove them.
-    // Or just iterate backwards.
-    for (int i = count - 1; i >= 0; i--) {
-        if (g_contacts_selected_mask[i]) {
-            const contact_t *c = cm_get_at(i);
-            if(c) cm_remove(c->id);
-        }
+  (void)e;
+  int count = cm_get_count();
+  // Delete from end to start to avoid index shifting issues?
+  // cm_remove removes by ID, so index shifting matters if we rely on indices.
+  // Better: Collect IDs to remove, then remove them.
+  // Or just iterate backwards.
+  for (int i = count - 1; i >= 0; i--) {
+    if (g_contacts_selected_mask[i]) {
+      const contact_t *c = cm_get_at(i);
+      if (c)
+        cm_remove(c->id);
     }
-    g_contacts_selection_mode = false;
-    refresh_ui();
+  }
+  g_contacts_selection_mode = false;
+  refresh_ui();
 }
 
 // ------------------- UI DRAWING -------------------
@@ -464,21 +479,26 @@ static void draw_list(void) {
   // Calculate Selected Count
   int selected_count = 0;
   if (g_contacts_selection_mode) {
-      for(int i=0; i<count && i<200; i++) {
-          if (g_contacts_selected_mask[i]) selected_count++;
-      }
+    for (int i = 0; i < count && i < 200; i++) {
+      if (g_contacts_selected_mask[i])
+        selected_count++;
+    }
   }
 
   // Header Title
   const char *title_text = "Contacts";
   if (g_contacts_selection_mode) {
-      if (selected_count > 0) title_text = "Selected"; // Dynamic?
+    if (selected_count > 0)
+      title_text = "Selected"; // Dynamic?
   }
-  
-  lv_obj_t *header = ui_create_title_bar(g_applet->screen, title_text, true, back_btn_clicked, NULL);
-  
+
+  lv_obj_t *header = ui_create_title_bar(g_applet->screen, title_text, true,
+                                         back_btn_clicked, NULL);
+
   // Edit Button in Header
-  ui_header_add_action_btn(header, g_contacts_selection_mode ? LV_SYMBOL_OK : LV_SYMBOL_EDIT, contacts_toggle_edit_clicked, NULL);
+  ui_header_add_action_btn(
+      header, g_contacts_selection_mode ? LV_SYMBOL_OK : LV_SYMBOL_EDIT,
+      contacts_toggle_edit_clicked, NULL);
 
   lv_obj_t *list = lv_obj_create(g_applet->screen);
   lv_obj_set_width(list, LV_PCT(100));
@@ -498,18 +518,18 @@ static void draw_list(void) {
                         (void *)c);
     lv_obj_add_event_cb(item, contact_long_press_handler, LV_EVENT_LONG_PRESSED,
                         (void *)c);
-                        
+
     // Checkbox (Left)
     if (g_contacts_selection_mode) {
-        lv_obj_t *cb = lv_checkbox_create(item);
-        lv_checkbox_set_text(cb, "");
-        lv_obj_align(cb, LV_ALIGN_LEFT_MID, 0, 0);
-        if (i < 200 && g_contacts_selected_mask[i]) {
-            lv_obj_add_state(cb, LV_STATE_CHECKED);
-        }
-        // Pass click to parent? Checkbox keeps it.
-        // We added event to item.
-        lv_obj_add_flag(cb, LV_OBJ_FLAG_EVENT_BUBBLE);
+      lv_obj_t *cb = lv_checkbox_create(item);
+      lv_checkbox_set_text(cb, "");
+      lv_obj_align(cb, LV_ALIGN_LEFT_MID, 0, 0);
+      if (i < 200 && g_contacts_selected_mask[i]) {
+        lv_obj_add_state(cb, LV_STATE_CHECKED);
+      }
+      // Pass click to parent? Checkbox keeps it.
+      // We added event to item.
+      lv_obj_add_flag(cb, LV_OBJ_FLAG_EVENT_BUBBLE);
     }
 
     // Adjust alignments based on mode
@@ -525,87 +545,89 @@ static void draw_list(void) {
 
     // Hide actions in selection mode
     if (!g_contacts_selection_mode) {
-        lv_obj_t *edit_btn = lv_btn_create(item);
-        lv_obj_set_size(edit_btn, 40, 40);
-        lv_obj_align(edit_btn, LV_ALIGN_RIGHT_MID, 0, 0);
-        lv_obj_set_style_bg_opa(edit_btn, 0, 0);
-        lv_obj_set_style_shadow_width(edit_btn, 0, 0);
+      lv_obj_t *edit_btn = lv_btn_create(item);
+      lv_obj_set_size(edit_btn, 40, 40);
+      lv_obj_align(edit_btn, LV_ALIGN_RIGHT_MID, 0, 0);
+      lv_obj_set_style_bg_opa(edit_btn, 0, 0);
+      lv_obj_set_style_shadow_width(edit_btn, 0, 0);
 
-        lv_obj_t *edit_icon = lv_label_create(edit_btn);
-        lv_label_set_text(edit_icon, LV_SYMBOL_EDIT);
-        lv_obj_set_style_text_color(edit_icon, lv_palette_main(LV_PALETTE_TEAL), 0);
-        lv_obj_set_style_text_font(edit_icon, &lv_font_montserrat_20, 0);
-        lv_obj_center(edit_icon);
+      lv_obj_t *edit_icon = lv_label_create(edit_btn);
+      lv_label_set_text(edit_icon, LV_SYMBOL_EDIT);
+      lv_obj_set_style_text_color(edit_icon, lv_palette_main(LV_PALETTE_TEAL),
+                                  0);
+      lv_obj_set_style_text_font(edit_icon, &lv_font_montserrat_20, 0);
+      lv_obj_center(edit_icon);
 
-        lv_obj_t *video_btn = lv_btn_create(item);
-        lv_obj_set_size(video_btn, 40, 40);
-        lv_obj_align(video_btn, LV_ALIGN_RIGHT_MID, -45, 0); // Left of Edit
-        lv_obj_set_style_bg_opa(video_btn, 0, 0);
+      lv_obj_t *video_btn = lv_btn_create(item);
+      lv_obj_set_size(video_btn, 40, 40);
+      lv_obj_align(video_btn, LV_ALIGN_RIGHT_MID, -45, 0); // Left of Edit
+      lv_obj_set_style_bg_opa(video_btn, 0, 0);
 
-        lv_obj_t *audio_btn = lv_btn_create(item);
-        lv_obj_set_size(audio_btn, 40, 40);
-        lv_obj_align(audio_btn, LV_ALIGN_RIGHT_MID, -90, 0); // Left of Video
-        lv_obj_set_style_bg_opa(audio_btn, 0, 0);
-        lv_obj_set_style_shadow_width(audio_btn, 0, 0);
+      lv_obj_t *audio_btn = lv_btn_create(item);
+      lv_obj_set_size(audio_btn, 40, 40);
+      lv_obj_align(audio_btn, LV_ALIGN_RIGHT_MID, -90, 0); // Left of Video
+      lv_obj_set_style_bg_opa(audio_btn, 0, 0);
+      lv_obj_set_style_shadow_width(audio_btn, 0, 0);
 
-        lv_obj_t *audio_icon = lv_label_create(audio_btn);
-        lv_label_set_text(audio_icon, LV_SYMBOL_CALL);
-        lv_obj_set_style_text_color(audio_icon, lv_palette_main(LV_PALETTE_GREEN),
-                                    0);
-        lv_obj_set_style_text_font(audio_icon, &lv_font_montserrat_20, 0);
-        lv_obj_center(audio_icon);
+      lv_obj_t *audio_icon = lv_label_create(audio_btn);
+      lv_label_set_text(audio_icon, LV_SYMBOL_CALL);
+      lv_obj_set_style_text_color(audio_icon, lv_palette_main(LV_PALETTE_GREEN),
+                                  0);
+      lv_obj_set_style_text_font(audio_icon, &lv_font_montserrat_20, 0);
+      lv_obj_center(audio_icon);
 
-        lv_obj_add_event_cb(audio_btn, contact_item_clicked, LV_EVENT_CLICKED,
-                            (void *)c);
-        lv_obj_set_style_shadow_width(video_btn, 0, 0);
+      lv_obj_add_event_cb(audio_btn, contact_item_clicked, LV_EVENT_CLICKED,
+                          (void *)c);
+      lv_obj_set_style_shadow_width(video_btn, 0, 0);
 
-        lv_obj_t *video_icon = lv_label_create(video_btn);
-        lv_label_set_text(video_icon, LV_SYMBOL_VIDEO);
-        lv_obj_set_style_text_color(video_icon, lv_palette_main(LV_PALETTE_BLUE),
-                                    0);
-        lv_obj_set_style_text_font(video_icon, &lv_font_montserrat_20, 0);
-        lv_obj_center(video_icon);
+      lv_obj_t *video_icon = lv_label_create(video_btn);
+      lv_label_set_text(video_icon, LV_SYMBOL_VIDEO);
+      lv_obj_set_style_text_color(video_icon, lv_palette_main(LV_PALETTE_BLUE),
+                                  0);
+      lv_obj_set_style_text_font(video_icon, &lv_font_montserrat_20, 0);
+      lv_obj_center(video_icon);
 
-        lv_obj_add_event_cb(video_btn, contact_video_clicked, LV_EVENT_CLICKED,
-                            (void *)c);
+      lv_obj_add_event_cb(video_btn, contact_video_clicked, LV_EVENT_CLICKED,
+                          (void *)c);
 
-        lv_obj_add_event_cb(edit_btn, edit_btn_clicked, LV_EVENT_CLICKED,
-                            (void *)c);
+      lv_obj_add_event_cb(edit_btn, edit_btn_clicked, LV_EVENT_CLICKED,
+                          (void *)c);
     }
   }
 
   // Floating Action Buttons
   if (g_contacts_selection_mode) {
-      if (selected_count > 0) {
-          lv_obj_t *trash_fab = lv_btn_create(g_applet->screen);
-          lv_obj_add_flag(trash_fab, LV_OBJ_FLAG_FLOATING);
-          lv_obj_set_size(trash_fab, 56, 56);
-          lv_obj_align(trash_fab, LV_ALIGN_BOTTOM_MID, 0, -20); // Bottom Center
-          lv_obj_set_style_radius(trash_fab, LV_RADIUS_CIRCLE, 0);
-          lv_obj_set_style_bg_color(trash_fab, lv_palette_main(LV_PALETTE_RED), 0);
-          
-          lv_obj_t *t_icon = lv_label_create(trash_fab);
-          lv_label_set_text(t_icon, LV_SYMBOL_TRASH);
-          lv_obj_center(t_icon);
-          
-          lv_obj_add_event_cb(trash_fab, contacts_delete_selected_clicked, LV_EVENT_CLICKED, NULL);
-      }
+    if (selected_count > 0) {
+      lv_obj_t *trash_fab = lv_btn_create(g_applet->screen);
+      lv_obj_add_flag(trash_fab, LV_OBJ_FLAG_FLOATING);
+      lv_obj_set_size(trash_fab, 56, 56);
+      lv_obj_align(trash_fab, LV_ALIGN_BOTTOM_MID, 0, -20); // Bottom Center
+      lv_obj_set_style_radius(trash_fab, LV_RADIUS_CIRCLE, 0);
+      lv_obj_set_style_bg_color(trash_fab, lv_palette_main(LV_PALETTE_RED), 0);
+
+      lv_obj_t *t_icon = lv_label_create(trash_fab);
+      lv_label_set_text(t_icon, LV_SYMBOL_TRASH);
+      lv_obj_center(t_icon);
+
+      lv_obj_add_event_cb(trash_fab, contacts_delete_selected_clicked,
+                          LV_EVENT_CLICKED, NULL);
+    }
   } else {
-      lv_obj_t *fab = lv_btn_create(g_applet->screen);
-      lv_obj_add_flag(fab, LV_OBJ_FLAG_FLOATING); // Ignore flex layout
-      lv_obj_set_size(fab, 56, 56);
-      lv_obj_align(fab, LV_ALIGN_BOTTOM_RIGHT, -20, -20);
-      lv_obj_set_style_radius(fab, LV_RADIUS_CIRCLE, 0);
-      lv_obj_set_style_bg_color(fab, lv_palette_main(LV_PALETTE_DEEP_ORANGE), 0);
-      lv_obj_set_style_shadow_width(fab, 10, 0);
-      lv_obj_set_style_shadow_opa(fab, LV_OPA_30, 0);
+    lv_obj_t *fab = lv_btn_create(g_applet->screen);
+    lv_obj_add_flag(fab, LV_OBJ_FLAG_FLOATING); // Ignore flex layout
+    lv_obj_set_size(fab, 56, 56);
+    lv_obj_align(fab, LV_ALIGN_BOTTOM_RIGHT, -20, -20);
+    lv_obj_set_style_radius(fab, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_bg_color(fab, lv_palette_main(LV_PALETTE_DEEP_ORANGE), 0);
+    lv_obj_set_style_shadow_width(fab, 10, 0);
+    lv_obj_set_style_shadow_opa(fab, LV_OPA_30, 0);
 
-      lv_obj_t *plus = lv_label_create(fab);
-      lv_label_set_text(plus, LV_SYMBOL_PLUS);
-      lv_obj_set_style_text_font(plus, &lv_font_montserrat_24, 0);
-      lv_obj_center(plus);
+    lv_obj_t *plus = lv_label_create(fab);
+    lv_label_set_text(plus, LV_SYMBOL_PLUS);
+    lv_obj_set_style_text_font(plus, &lv_font_montserrat_24, 0);
+    lv_obj_center(plus);
 
-      lv_obj_add_event_cb(fab, add_btn_clicked, LV_EVENT_CLICKED, NULL);
+    lv_obj_add_event_cb(fab, add_btn_clicked, LV_EVENT_CLICKED, NULL);
   }
 }
 
@@ -615,9 +637,16 @@ static void draw_editor(void) {
   lv_obj_set_style_pad_all(g_applet->screen, 0, 0);
   lv_obj_set_style_pad_gap(g_applet->screen, 0, 0);
 
+  // Clear Input Group
+  lv_group_t *g = lv_group_get_default();
+  if (g) {
+    lv_group_remove_all_objs(g);
+  }
+
   lv_obj_t *save_btn = ui_header_add_action_btn(
       ui_create_title_bar(g_applet->screen,
-                          is_new_contact ? "New Contact" : current_edit_contact.name,
+                          is_new_contact ? "New Contact"
+                                         : current_edit_contact.name,
                           true, back_btn_clicked, NULL),
       LV_SYMBOL_OK, NULL, NULL);
 
@@ -647,8 +676,12 @@ static void draw_editor(void) {
   lv_obj_t *name_ta = lv_textarea_create(content);
   lv_textarea_set_one_line(name_ta, true);
   lv_obj_set_width(name_ta, LV_PCT(90));
+  lv_obj_set_width(name_ta, LV_PCT(90));
   lv_textarea_set_text(name_ta, current_edit_contact.name);
   lv_textarea_set_placeholder_text(name_ta, "Name");
+  lv_obj_add_flag(name_ta, LV_OBJ_FLAG_CLICKABLE);
+  if (g)
+    lv_group_add_obj(g, name_ta);
 
   lv_obj_t *num_lbl = lv_label_create(content);
   lv_label_set_text(num_lbl, "SIP or tel URI");
@@ -657,9 +690,13 @@ static void draw_editor(void) {
 
   lv_obj_t *num_ta = lv_textarea_create(content);
   lv_textarea_set_one_line(num_ta, true);
+  lv_textarea_set_one_line(num_ta, true);
   lv_obj_set_width(num_ta, LV_PCT(90));
   lv_textarea_set_text(num_ta, current_edit_contact.number);
   lv_textarea_set_placeholder_text(num_ta, "sip:user@domain");
+  lv_obj_add_flag(num_ta, LV_OBJ_FLAG_CLICKABLE);
+  if (g)
+    lv_group_add_obj(g, num_ta);
 
   lv_obj_t *fav_cont = lv_obj_create(content);
   lv_obj_set_size(fav_cont, LV_PCT(90), 50);
@@ -676,6 +713,8 @@ static void draw_editor(void) {
   if (!is_new_contact && current_edit_contact.is_favorite) {
     lv_obj_add_state(fav_sw, LV_STATE_CHECKED);
   }
+  if (g)
+    lv_group_add_obj(g, fav_sw);
 
   if (!is_new_contact) {
     lv_obj_t *actions_cont = lv_obj_create(content);
@@ -735,6 +774,11 @@ static void draw_editor(void) {
   inputs[2] = fav_sw;
 
   lv_obj_add_event_cb(save_btn, save_btn_clicked, LV_EVENT_CLICKED, inputs);
+
+  // Explicitly focus name field
+  if (g) {
+    lv_group_focus_obj(name_ta);
+  }
 }
 
 // ------------------- CONTEXT MENU -------------------
@@ -746,7 +790,10 @@ static void close_context_menu(void) {
   }
 }
 
-static void context_menu_cancel(lv_event_t *e) { (void)e; close_context_menu(); }
+static void context_menu_cancel(lv_event_t *e) {
+  (void)e;
+  close_context_menu();
+}
 
 static void context_menu_delete(lv_event_t *e) {
   (void)e;

@@ -35,7 +35,8 @@ static void global_gesture_handler(lv_event_t *e) {
   (void)e;
   lv_dir_t dir = lv_indev_get_gesture_dir(lv_indev_get_act());
   // User requested "slide left-right" support.
-  // We treat BOTH directions as "Back" for now to match user expectation of "swip left" response.
+  // We treat BOTH directions as "Back" for now to match user expectation of
+  // "swip left" response.
   if (dir == LV_DIR_RIGHT || dir == LV_DIR_LEFT) {
     log_info("AppletManager", "Detected Swipe (Dir: %d) - Going Back", dir);
     applet_manager_back();
@@ -57,8 +58,10 @@ static int applet_init_if_needed(applet_t *applet) {
     }
 
     // Register global gesture handler
-    lv_obj_add_flag(applet->screen, LV_OBJ_FLAG_CLICKABLE); // Ensure screen captures input
-    lv_obj_add_event_cb(applet->screen, global_gesture_handler, LV_EVENT_GESTURE, NULL);
+    lv_obj_add_flag(applet->screen,
+                    LV_OBJ_FLAG_CLICKABLE); // Ensure screen captures input
+    lv_obj_add_event_cb(applet->screen, global_gesture_handler,
+                        LV_EVENT_GESTURE, NULL);
 
     // Call init callback if provided
     if (applet->callbacks.init) {
@@ -101,8 +104,18 @@ int applet_manager_launch_applet(applet_t *applet) {
     }
   }
 
+  // FIX: Update state BEFORE callbacks to prevent re-entrancy
+  // (e.g. if on_call_state_change checks current_applet)
+  applet_t *prev_applet = g_manager.current_applet;
+  g_manager.current_applet = applet;
+
+  // Store original state to decide Start vs Resume
+  applet_state_t original_state = applet->state;
+
+  applet->state = APPLET_STATE_RUNNING;
+
   // Start or resume the new applet
-  if (applet->state == APPLET_STATE_PAUSED) {
+  if (original_state == APPLET_STATE_PAUSED) {
     if (applet->callbacks.resume) {
       applet->callbacks.resume(applet);
     }
@@ -112,18 +125,23 @@ int applet_manager_launch_applet(applet_t *applet) {
     }
   }
 
-  applet->state = APPLET_STATE_RUNNING;
-  g_manager.current_applet = applet;
-
-  // Load the screen with animation
-  lv_scr_load_anim(applet->screen, LV_SCR_LOAD_ANIM_MOVE_LEFT, 300, 0, false);
+  // Load the screen directly (No animation to avoid crash in
+  // lv_obj_get_local_style_prop)
+  if (applet->screen && lv_obj_is_valid(applet->screen)) {
+    lv_scr_load(applet->screen);
+  } else {
+    log_error("AppletManager", "Error: Invalid screen for applet %s",
+              applet->name);
+    return -3;
+  }
 
   log_info("AppletManager", "Launched applet: %s", applet->name);
   return 0;
 }
 
 applet_t *applet_manager_get_applet(const char *name) {
-  if (!name) return NULL;
+  if (!name)
+    return NULL;
 
   for (int i = 0; i < g_manager.applet_count; i++) {
     if (strcmp(g_manager.applets[i]->name, name) == 0) {
@@ -172,9 +190,8 @@ int applet_manager_back(void) {
   prev_applet->state = APPLET_STATE_RUNNING;
   g_manager.current_applet = prev_applet;
 
-  // Load the screen with animation
-  lv_scr_load_anim(prev_applet->screen, LV_SCR_LOAD_ANIM_MOVE_RIGHT, 300, 0,
-                   false);
+  // Load the screen directly
+  lv_scr_load(prev_applet->screen);
 
   log_debug("AppletManager", "Back to applet: %s", prev_applet->name);
   return 0;
@@ -199,7 +216,9 @@ int applet_manager_close_current(void) {
 
   // Delete screen
   if (applet->screen) {
-    lv_obj_del(applet->screen);
+    if (lv_obj_is_valid(applet->screen)) {
+      lv_obj_del(applet->screen);
+    }
     applet->screen = NULL;
   }
 

@@ -6,6 +6,7 @@ An embedded SIP Softphone application for ARM platforms using [Baresip](https://
 - **SIP Telephony**: Make and receive VoIP calls using Baresip.
 - **Touch UI**: Responsive interface built with LVGL (Light and Versatile Graphics Library).
 - **Video Calls**: Support for raw video stream display (via SDL or FBDEV).
+- **Dynamic Video Source**: Automatically detects `/dev/video0` for webcam support, falling back to a test pattern generator if unavailable.
 - **Multi-Call Management**: internal handling and UI for multiple incoming calls.
 - **History & Contacts**: SQLite-backed call history and contact management.
 - **Applet-based Architecture**: Modular design with independent applets:

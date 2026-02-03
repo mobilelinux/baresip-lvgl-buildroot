@@ -9,7 +9,7 @@ add_definitions(-DUSE_FBDEV)
 add_definitions(-DUSE_EVDEV)
 
 # Force static build for baresip and modules
-set(STATIC OFF CACHE BOOL "Build static" FORCE)
+set(STATIC ON CACHE BOOL "Build static" FORCE)
 
 # Force variables for FindRE.cmake and FindREM.cmake inside subprojects
 set(RE_INCLUDE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/deps/re/include CACHE PATH "re include" FORCE)
@@ -74,12 +74,17 @@ set(LV_DRIVERS_SOURCES
 )
 
 file(GLOB_RECURSE APP_SOURCES 
-    "src/*.c"
+    "src/main.c"
+    "src/manager/*.c"
+    "src/applets/*.c"
+    "src/ui/*.c"
 )
 
 # Module Sources
+# Module Sources
 set(MODULE_SOURCES
     # src/modules/gb28181/gb28181.c
+    # src/modules/swscale/swscale.c
 )
 
 # Executable
@@ -95,9 +100,12 @@ set_target_properties(baresip-lvgl PROPERTIES ENABLE_EXPORTS TRUE)
 
 # Link Libraries
 target_link_libraries(baresip-lvgl
-    -Wl,--whole-archive baresip re -Wl,--no-whole-archive
-    ssl crypto pthread z resolv sqlite3
-    # avcodec avformat avutil swscale avdevice swresample
+    -Wl,--whole-archive 
+    ${CMAKE_CURRENT_BINARY_DIR}/deps/baresip/libbaresip.a 
+    ${CMAKE_CURRENT_BINARY_DIR}/deps/re/libre.a 
+    -Wl,--no-whole-archive
+    ssl crypto pthread z resolv sqlite3 udev
+    -lavcodec -lavformat -lavutil -lswscale -lavdevice -lswresample -lavfilter
 )
 
 if(APPLE)
@@ -115,7 +123,7 @@ if(APPLE)
 else()
     target_link_libraries(baresip-lvgl
         ${ALSA_LIBRARIES}
-        # ${LIBV4L2_LIBRARIES}
+        -lv4l2 -latomic -lm -lopus -lSDL2
     )
 endif()
 

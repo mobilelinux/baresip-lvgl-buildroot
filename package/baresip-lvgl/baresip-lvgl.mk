@@ -9,7 +9,7 @@ BARESIP_LVGL_SITE = $(TOPDIR)/package/baresip-lvgl
 BARESIP_LVGL_SITE_METHOD = local
 BARESIP_LVGL_LICENSE = Apache-2.0
 BARESIP_LVGL_LICENSE_FILES = LICENSE
-BARESIP_LVGL_DEPENDENCIES = openssl zlib opus sqlite ffmpeg
+BARESIP_LVGL_DEPENDENCIES = openssl zlib opus sqlite ffmpeg eudev
 
 # GIT_SUBMODULES disabled because .gitmodules is missing/broken in the repo.
 # We must manually fetch dependencies (re, rem, baresip) into deps/

@@ -27,7 +27,8 @@ typedef void (*message_event_cb)(const char *peer_uri, const char *text);
 int baresip_manager_init(void);
 // Replaces set_callback
 void baresip_manager_add_listener(call_event_cb cb);
-void baresip_manager_set_callback(call_event_cb cb); // Deprecated but kept for compat
+void baresip_manager_set_callback(
+    call_event_cb cb); // Deprecated but kept for compat
 
 void baresip_manager_set_reg_callback(reg_event_cb cb);
 void baresip_manager_set_message_callback(message_event_cb cb);
@@ -43,14 +44,18 @@ int baresip_manager_hangup(void);
 int baresip_manager_send_dtmf(char key);
 int baresip_manager_transfer(const char *target);
 enum call_state baresip_manager_get_state(void);
+bool baresip_manager_is_current_call_held(void);
 const char *baresip_manager_get_peer(void);
 void baresip_manager_mute(bool mute);
 bool baresip_manager_is_muted(void);
 int baresip_manager_add_account(const voip_account_t *account);
 int baresip_manager_account_register(const char *aor);
-int baresip_manager_account_register_simple(const char *user, const char *domain);
+int baresip_manager_account_register_simple(const char *user,
+                                            const char *domain);
 int baresip_manager_send_message(const char *peer_uri, const char *text);
 void baresip_manager_get_current_call_display_name(char *out_buf, size_t size);
+// Video Display
+void baresip_manager_process_video(void);
 void baresip_manager_set_video_objects(void *remote_obj, void *local_obj);
 void baresip_manager_destroy(void);
 
@@ -77,6 +82,8 @@ int baresip_manager_resume_call(void *call_id);
 #include "logger.h"
 void baresip_manager_set_video_rect(int x, int y, int w, int h);
 void baresip_manager_set_local_video_rect(int x, int y, int w, int h);
+void *baresip_manager_get_local_video_dsc(void);
+bool baresip_manager_is_video_call(void);
 void baresip_manager_set_log_level(log_level_t level);
 
 #endif // BARESIP_MANAGER_H

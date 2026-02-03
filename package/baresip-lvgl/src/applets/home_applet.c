@@ -35,11 +35,11 @@ typedef struct {
   lv_obj_t *missed_call_label;
   lv_obj_t *unread_msg_btn;
   lv_obj_t *unread_msg_label;
-  
+
   lv_obj_t *apps_grid;
-  
+
   // Dynamic Layout
-  lv_obj_t *info_cont; 
+  lv_obj_t *info_cont;
 
   // Cached Data
   int default_account_index;
@@ -50,8 +50,6 @@ typedef struct {
 
 // Forward decl
 
-
-
 // View Mode Externs
 extern void call_applet_request_incoming_view(void);
 extern void call_applet_request_active_view(void);
@@ -60,191 +58,211 @@ extern void settings_applet_open_accounts(void);
 
 // Helper to refresh cached account data (Disk IO)
 static void refresh_account_data(home_data_t *data) {
-    if (!data) return;
+  if (!data)
+    return;
 
-    app_config_t config;
-    if (config_load_app_settings(&config) != 0) {
-        config.default_account_index = -1;
-    }
-    data->default_account_index = config.default_account_index;
+  app_config_t config;
+  if (config_load_app_settings(&config) != 0) {
+    config.default_account_index = -1;
+  }
+  data->default_account_index = config.default_account_index;
 
-    if (config.default_account_index >= 0) {
-        voip_account_t accounts[MAX_ACCOUNTS];
-        int count = config_load_accounts(accounts, MAX_ACCOUNTS);
-        if (config.default_account_index < count) {
-            voip_account_t *acc = &accounts[config.default_account_index];
-            strncpy(data->current_account_user, acc->username, sizeof(data->current_account_user)-1);
-            strncpy(data->current_account_server, acc->server, sizeof(data->current_account_server)-1);
-            strncpy(data->current_account_display, acc->display_name, sizeof(data->current_account_display)-1);
-        } else {
-             data->default_account_index = -1; // Invalid
-        }
+  if (config.default_account_index >= 0) {
+    voip_account_t accounts[MAX_ACCOUNTS];
+    int count = config_load_accounts(accounts, MAX_ACCOUNTS);
+    if (config.default_account_index < count) {
+      voip_account_t *acc = &accounts[config.default_account_index];
+      strncpy(data->current_account_user, acc->username,
+              sizeof(data->current_account_user) - 1);
+      strncpy(data->current_account_server, acc->server,
+              sizeof(data->current_account_server) - 1);
+      strncpy(data->current_account_display, acc->display_name,
+              sizeof(data->current_account_display) - 1);
+    } else {
+      data->default_account_index = -1; // Invalid
     }
+  }
 }
 
 static void update_account_display(home_data_t *data) {
-    if (!data || !data->account_btn) return;
+  if (!data || !data->account_btn)
+    return;
 
-    // Use cached data
-    if (data->default_account_index < 0) {
-        // No Account
-        lv_label_set_text(data->account_label, "Add Account");
-        lv_label_set_text(data->account_icon, LV_SYMBOL_PLUS); // Or User Plus
-        lv_obj_set_style_text_color(data->account_icon, lv_palette_main(LV_PALETTE_GREY), 0);
+  // Use cached data
+  if (data->default_account_index < 0) {
+    // No Account
+    lv_label_set_text(data->account_label, "Add Account");
+    lv_label_set_text(data->account_icon, LV_SYMBOL_PLUS); // Or User Plus
+    lv_obj_set_style_text_color(data->account_icon,
+                                lv_palette_main(LV_PALETTE_GREY), 0);
+  } else {
+    // Display Name (or Username)
+    if (strlen(data->current_account_display) > 0)
+      lv_label_set_text(data->account_label, data->current_account_display);
+    else
+      lv_label_set_text(data->account_label, data->current_account_user);
+
+    // Status - Check live status from Manager (Cheap Memory Lookup)
+    char aor[256];
+    snprintf(aor, sizeof(aor), "sip:%s@%s", data->current_account_user,
+             data->current_account_server);
+    reg_status_t status = baresip_manager_get_account_status(aor);
+
+    if (status == REG_STATUS_REGISTERED) {
+      lv_label_set_text(data->account_icon, LV_SYMBOL_OK);
+      lv_obj_set_style_text_color(data->account_icon,
+                                  lv_palette_main(LV_PALETTE_GREEN), 0);
+    } else if (status == REG_STATUS_REGISTERING) {
+      lv_label_set_text(data->account_icon, LV_SYMBOL_REFRESH);
+      lv_obj_set_style_text_color(data->account_icon,
+                                  lv_palette_main(LV_PALETTE_YELLOW), 0);
     } else {
-            // Display Name (or Username)
-            if (strlen(data->current_account_display) > 0)
-                lv_label_set_text(data->account_label, data->current_account_display);
-            else
-                lv_label_set_text(data->account_label, data->current_account_user);
-
-            // Status - Check live status from Manager (Cheap Memory Lookup)
-            char aor[256];
-            snprintf(aor, sizeof(aor), "sip:%s@%s", data->current_account_user, data->current_account_server);
-            reg_status_t status = baresip_manager_get_account_status(aor);
-
-            if (status == REG_STATUS_REGISTERED) {
-                 lv_label_set_text(data->account_icon, LV_SYMBOL_OK);
-                 lv_obj_set_style_text_color(data->account_icon, lv_palette_main(LV_PALETTE_GREEN), 0);
-            } else if (status == REG_STATUS_REGISTERING) {
-                 lv_label_set_text(data->account_icon, LV_SYMBOL_REFRESH);
-                 lv_obj_set_style_text_color(data->account_icon, lv_palette_main(LV_PALETTE_YELLOW), 0);
-            } else {
-                 lv_label_set_text(data->account_icon, LV_SYMBOL_WARNING);
-                 lv_obj_set_style_text_color(data->account_icon, lv_palette_main(LV_PALETTE_RED), 0);
-            }
+      lv_label_set_text(data->account_icon, LV_SYMBOL_WARNING);
+      lv_obj_set_style_text_color(data->account_icon,
+                                  lv_palette_main(LV_PALETTE_RED), 0);
     }
+  }
 }
 
 // FORWARD DECLARATION
 static void update_account_display(home_data_t *data);
 
 static void home_applet_update_notifications(home_data_t *data) {
-  if (!data) return;
-  
+  if (!data)
+    return;
+
   // 1. Get States
   int missed = 0;
   int unread = 0;
   db_get_unread_comp_count(&missed, &unread);
-  
+
   enum call_state state = baresip_manager_get_state();
-  log_info("HomeApplet", "Update Notifications: State=%d Missed=%d Unread=%d", state, missed, unread);
-  
+  // log_info("HomeApplet", "Update Notifications: State=%d Missed=%d
+  // Unread=%d", state, missed, unread);
+
   // 2. Update Home Notifications
-  // FIX: Scan ALL calls. Baresip Manager state only reflects the *current* focused call.
-  // We want to show "Incoming" if ANY call is incoming, and "In Call" if ANY is active.
+  // FIX: Scan ALL calls. Baresip Manager state only reflects the *current*
+  // focused call. We want to show "Incoming" if ANY call is incoming, and "In
+  // Call" if ANY is active.
   call_info_t calls[MAX_CALLS];
   int count = baresip_manager_get_active_calls(calls, MAX_CALLS);
 
-  
   bool any_incoming = false;
   bool any_active = false;
-  
-  for(int i=0; i<count; i++) {
-      if (calls[i].state == CALL_STATE_INCOMING) {
-          any_incoming = true;
-      }
-      else if (calls[i].state == CALL_STATE_ESTABLISHED || 
+
+  for (int i = 0; i < count; i++) {
+    if (calls[i].state == CALL_STATE_INCOMING) {
+      any_incoming = true;
+    } else if (calls[i].state == CALL_STATE_ESTABLISHED ||
                calls[i].state == CALL_STATE_OUTGOING ||
                calls[i].state == CALL_STATE_RINGING ||
                calls[i].state == CALL_STATE_EARLY) {
-          any_active = true;
-      }
+      any_active = true;
+    }
   }
 
   // Incoming Call Notification
   if (any_incoming) {
-      lv_obj_clear_flag(data->incoming_call_btn, LV_OBJ_FLAG_HIDDEN);
-      // Optional: Update text to show count if > 1? For now keep simple.
+    lv_obj_clear_flag(data->incoming_call_btn, LV_OBJ_FLAG_HIDDEN);
+    // Optional: Update text to show count if > 1? For now keep simple.
   } else {
-      lv_obj_add_flag(data->incoming_call_btn, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(data->incoming_call_btn, LV_OBJ_FLAG_HIDDEN);
   }
-  
+
   // Active Call Notification
-  // Only show if NOT showing Incoming? Or show both? 
-  // User request: "when there is any incoming call, should show 'Incomings' notification"
-  // It implies priority. But we have space for both. Let's show both if applicable.
+  // Only show if NOT showing Incoming? Or show both?
+  // User request: "when there is any incoming call, should show 'Incomings'
+  // notification" It implies priority. But we have space for both. Let's show
+  // both if applicable.
   if (any_active) {
-       lv_obj_clear_flag(data->in_call_btn, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_clear_flag(data->in_call_btn, LV_OBJ_FLAG_HIDDEN);
   } else {
-       lv_obj_add_flag(data->in_call_btn, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(data->in_call_btn, LV_OBJ_FLAG_HIDDEN);
   }
-  
+
   // Missed & Messages logic remains same...
   if (missed > 0) {
-      lv_obj_clear_flag(data->missed_call_btn, LV_OBJ_FLAG_HIDDEN);
-      char buf[32];
-      snprintf(buf, sizeof(buf), "%d Missed Call%s", missed, missed > 1 ? "s" : "");
-      lv_label_set_text(data->missed_call_label, buf);
+    lv_obj_clear_flag(data->missed_call_btn, LV_OBJ_FLAG_HIDDEN);
+    char buf[32];
+    snprintf(buf, sizeof(buf), "%d Missed Call%s", missed,
+             missed > 1 ? "s" : "");
+    lv_label_set_text(data->missed_call_label, buf);
   } else {
-      lv_obj_add_flag(data->missed_call_btn, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(data->missed_call_btn, LV_OBJ_FLAG_HIDDEN);
   }
-  
+
   if (unread > 0) {
-      lv_obj_clear_flag(data->unread_msg_btn, LV_OBJ_FLAG_HIDDEN);
-      char buf[32];
-      snprintf(buf, sizeof(buf), "%d New Message%s", unread, unread > 1 ? "s" : "");
-      lv_label_set_text(data->unread_msg_label, buf);
+    lv_obj_clear_flag(data->unread_msg_btn, LV_OBJ_FLAG_HIDDEN);
+    char buf[32];
+    snprintf(buf, sizeof(buf), "%d New Message%s", unread,
+             unread > 1 ? "s" : "");
+    lv_label_set_text(data->unread_msg_label, buf);
   } else {
-      lv_obj_add_flag(data->unread_msg_btn, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(data->unread_msg_btn, LV_OBJ_FLAG_HIDDEN);
   }
-  
+
   // Badge updates...
   if (data->apps_grid) {
-      uint32_t cnt = lv_obj_get_child_cnt(data->apps_grid);
-      for(uint32_t i=0; i<cnt; i++) {
-          lv_obj_t *tile = lv_obj_get_child(data->apps_grid, i);
-          if (lv_obj_get_child_cnt(tile) < 3) continue;
-          lv_obj_t *lbl = lv_obj_get_child(tile, 1);
-          lv_obj_t *badge = lv_obj_get_child(tile, 2);
-          const char *txt = lv_label_get_text(lbl);
-          if (strcmp(txt, "Call Log") == 0) {
-               if (missed > 0) {
-                   lv_obj_clear_flag(badge, LV_OBJ_FLAG_HIDDEN);
-                   lv_label_set_text_fmt(badge, "%d", missed);
-               } else {
-                   lv_obj_add_flag(badge, LV_OBJ_FLAG_HIDDEN);
-               }
-          } else if (strcmp(txt, "Messages") == 0) {
-               if (unread > 0) {
-                   lv_obj_clear_flag(badge, LV_OBJ_FLAG_HIDDEN);
-                   lv_label_set_text_fmt(badge, "%d", unread);
-               } else {
-                   lv_obj_add_flag(badge, LV_OBJ_FLAG_HIDDEN);
-               }
-          }
+    uint32_t cnt = lv_obj_get_child_cnt(data->apps_grid);
+    for (uint32_t i = 0; i < cnt; i++) {
+      lv_obj_t *tile = lv_obj_get_child(data->apps_grid, i);
+      if (lv_obj_get_child_cnt(tile) < 3)
+        continue;
+      lv_obj_t *lbl = lv_obj_get_child(tile, 1);
+      lv_obj_t *badge = lv_obj_get_child(tile, 2);
+      const char *txt = lv_label_get_text(lbl);
+      if (strcmp(txt, "Call Log") == 0) {
+        if (missed > 0) {
+          lv_obj_clear_flag(badge, LV_OBJ_FLAG_HIDDEN);
+          lv_label_set_text_fmt(badge, "%d", missed);
+        } else {
+          lv_obj_add_flag(badge, LV_OBJ_FLAG_HIDDEN);
+        }
+      } else if (strcmp(txt, "Messages") == 0) {
+        if (unread > 0) {
+          lv_obj_clear_flag(badge, LV_OBJ_FLAG_HIDDEN);
+          lv_label_set_text_fmt(badge, "%d", unread);
+        } else {
+          lv_obj_add_flag(badge, LV_OBJ_FLAG_HIDDEN);
+        }
       }
+    }
   }
 }
 
 // Callback for instant updates
-static void home_on_call_state(enum call_state state, const char *peer, void *call) {
-    (void)state; (void)peer; (void)call;
-    // We need 'data' pointer. Where to store it?
-    // We can iterate applets to find Home, or store a static pointer since Home is singleton-ish.
-    // For now, let's look up Home applet instance.
-    int count;
-    applet_t **applets = applet_manager_get_all(&count);
-    for(int i=0; i<count; i++) {
-       if (applets[i] && strcmp(applets[i]->name, "Home") == 0) {
-           home_data_t *d = (home_data_t*)applets[i]->user_data;
-           if (d) {
-               // Must run on UI thread? LBGL is not thread safe?
-               // Assuming callback is from main thread (baresip_manager_loop runs in main).
-               home_applet_update_notifications(d);
-               
-               // FIX: Auto-navigate to Call Applet on Incoming Call
-                if (applets[i]->state == APPLET_STATE_RUNNING) {
-                    if (state == CALL_STATE_INCOMING) {
-                         log_info("HomeApplet", "Auto-launching Call Applet for Incoming Call");
-                         call_applet_request_incoming_view();
-                         applet_manager_launch("Call"); 
-                    }
-                }
-           }
-           break;
-       }
+static void home_on_call_state(enum call_state state, const char *peer,
+                               void *call) {
+  (void)state;
+  (void)peer;
+  (void)call;
+  // We need 'data' pointer. Where to store it?
+  // We can iterate applets to find Home, or store a static pointer since Home
+  // is singleton-ish. For now, let's look up Home applet instance.
+  int count;
+  applet_t **applets = applet_manager_get_all(&count);
+  for (int i = 0; i < count; i++) {
+    if (applets[i] && strcmp(applets[i]->name, "Home") == 0) {
+      home_data_t *d = (home_data_t *)applets[i]->user_data;
+      if (d) {
+        // Must run on UI thread? LBGL is not thread safe?
+        // Assuming callback is from main thread (baresip_manager_loop runs in
+        // main).
+        home_applet_update_notifications(d);
+
+        // FIX: Auto-navigate to Call Applet on Incoming Call
+        if (applets[i]->state == APPLET_STATE_RUNNING) {
+          if (state == CALL_STATE_INCOMING) {
+            log_info("HomeApplet",
+                     "Auto-launching Call Applet for Incoming Call");
+            call_applet_request_incoming_view();
+            applet_manager_launch("Call");
+          }
+        }
+      }
+      break;
     }
+  }
 }
 
 static void update_clock(lv_timer_t *timer) {
@@ -266,12 +284,13 @@ static void update_clock(lv_timer_t *timer) {
   // Format: "Mon, Jan 12"
   strftime(date_buf, sizeof(date_buf), "%a, %b %d", t);
   if (data->date_label) {
-      lv_label_set_text(data->date_label, date_buf);
+    lv_label_set_text(data->date_label, date_buf);
   }
 
-  // Update Account Status (every time or less freq? Every sec is fine for status icon)
+  // Update Account Status (every time or less freq? Every sec is fine for
+  // status icon)
   update_account_display(data);
-  
+
   // Periodic Update Notifications (Backup)
   home_applet_update_notifications(data);
 }
@@ -284,9 +303,9 @@ static void applet_tile_clicked(lv_event_t *e) {
 }
 
 static void account_info_clicked(lv_event_t *e) {
-    (void)e;
-    settings_applet_open_accounts();
-    applet_manager_launch("Settings");
+  (void)e;
+  settings_applet_open_accounts();
+  applet_manager_launch("Settings");
 }
 
 // Externs for View Modes (Moved to top)
@@ -308,23 +327,23 @@ static void in_call_clicked(lv_event_t *e) {
 }
 
 static void missed_call_clicked(lv_event_t *e) {
-    (void)e;
-    // Launch Call Log
-    applet_manager_launch("Call Log");
-    // Badge clearing handled by applet start
+  (void)e;
+  // Launch Call Log
+  applet_manager_launch("Call Log");
+  // Badge clearing handled by applet start
 }
 
 static void unread_msg_clicked(lv_event_t *e) {
-    (void)e;
-    applet_manager_launch("Messages");
+  (void)e;
+  applet_manager_launch("Messages");
 }
 
 // Helper to free user_data (string)
-static void free_user_data(lv_event_t * e) {
-    void * data = lv_event_get_user_data(e);
-    if(data) {
-        free(data);
-    }
+static void free_user_data(lv_event_t *e) {
+  void *data = lv_event_get_user_data(e);
+  if (data) {
+    free(data);
+  }
 }
 
 // Externs
@@ -332,17 +351,17 @@ extern void call_applet_open(const char *number);
 extern void call_applet_video_open(const char *number);
 
 static void fav_audio_clicked(lv_event_t *e) {
-    const char *number = (const char *)lv_event_get_user_data(e);
-    if (number) {
-        call_applet_open(number);
-    }
+  const char *number = (const char *)lv_event_get_user_data(e);
+  if (number) {
+    call_applet_open(number);
+  }
 }
 
 static void fav_video_clicked(lv_event_t *e) {
-    const char *number = (const char *)lv_event_get_user_data(e);
-    if (number) {
-        call_applet_video_open(number);
-    }
+  const char *number = (const char *)lv_event_get_user_data(e);
+  if (number) {
+    call_applet_video_open(number);
+  }
 }
 
 // Externs for Contacts
@@ -350,9 +369,9 @@ extern applet_t contacts_applet;
 extern void contacts_applet_open_new(const char *number);
 
 static void add_contact_clicked(lv_event_t *e) {
-    (void)e;
-    contacts_applet_open_new("");
-    applet_manager_launch_applet(&contacts_applet);
+  (void)e;
+  contacts_applet_open_new("");
+  applet_manager_launch_applet(&contacts_applet);
 }
 
 static void populate_favorites(home_data_t *data) {
@@ -365,7 +384,7 @@ static void populate_favorites(home_data_t *data) {
   // Load Config
   app_config_t cfg;
   if (config_load_app_settings(&cfg) != 0) {
-      cfg.show_favorites = true; // Default
+    cfg.show_favorites = true; // Default
   }
 
   // Load Contacts (API)
@@ -378,85 +397,88 @@ static void populate_favorites(home_data_t *data) {
   bool show_dock = (count > 0 && cfg.show_favorites);
 
   if (show_dock) {
-      // Show Dock
-      lv_obj_clear_flag(data->favorites_dock, LV_OBJ_FLAG_HIDDEN);
-      // Align Info to Left (38%) -> REMOVED per user request
-      /* if (data->info_cont) {
-           lv_obj_align(data->info_cont, LV_ALIGN_TOP_LEFT, LV_PCT(38), LV_PCT(38));
-      } */
+    // Show Dock
+    lv_obj_clear_flag(data->favorites_dock, LV_OBJ_FLAG_HIDDEN);
+    // Align Info to Left (38%) -> REMOVED per user request
+    /* if (data->info_cont) {
+         lv_obj_align(data->info_cont, LV_ALIGN_TOP_LEFT, LV_PCT(38),
+    LV_PCT(38));
+    } */
 
-      for (int i = 0; i < count; i++) {
-        // Container
-        lv_obj_t *cont = lv_obj_create(data->favorites_dock);
-        lv_obj_set_size(cont, 230, 70); // Wider for buttons
-        lv_obj_set_style_pad_all(cont, 5, 0);
-        lv_obj_clear_flag(cont, LV_OBJ_FLAG_SCROLLABLE);
-        lv_obj_set_style_bg_opa(cont, LV_OPA_TRANSP, 0);
-        lv_obj_set_style_border_width(cont, 0, 0);
+    for (int i = 0; i < count; i++) {
+      // Container
+      lv_obj_t *cont = lv_obj_create(data->favorites_dock);
+      lv_obj_set_size(cont, 230, 70); // Wider for buttons
+      lv_obj_set_style_pad_all(cont, 5, 0);
+      lv_obj_clear_flag(cont, LV_OBJ_FLAG_SCROLLABLE);
+      lv_obj_set_style_bg_opa(cont, LV_OPA_TRANSP, 0);
+      lv_obj_set_style_border_width(cont, 0, 0);
 
-        // Name/Initials
-        lv_obj_t *lbl = lv_label_create(cont);
-        if (strlen(contacts[i].name) > 0) {
-            lv_label_set_text(lbl, contacts[i].name); // Full Name
-        } else {
-            lv_label_set_text(lbl, contacts[i].number);
-        }
-        lv_obj_set_style_text_font(lbl, &lv_font_montserrat_16, 0);
-        lv_obj_align(lbl, LV_ALIGN_LEFT_MID, 5, 0);
-        lv_obj_set_width(lbl, 110); // Limit width
-        lv_label_set_long_mode(lbl, LV_LABEL_LONG_DOT);
-
-        // Video Button (Rightmost)
-        lv_obj_t *btn_vid = lv_btn_create(cont);
-        lv_obj_set_size(btn_vid, 40, 40);
-        lv_obj_align(btn_vid, LV_ALIGN_RIGHT_MID, 0, 0);
-        lv_obj_set_style_bg_color(btn_vid, lv_palette_main(LV_PALETTE_TEAL), 0);
-        
-        lv_obj_t *lbl_vid = lv_label_create(btn_vid);
-        lv_label_set_text(lbl_vid, LV_SYMBOL_VIDEO);
-        lv_obj_center(lbl_vid);
-
-        char *num_copy_v = strdup(contacts[i].number);
-        lv_obj_add_event_cb(btn_vid, fav_video_clicked, LV_EVENT_CLICKED, num_copy_v);
-        lv_obj_add_event_cb(btn_vid, free_user_data, LV_EVENT_DELETE, num_copy_v);
-
-        // Audio Button (Left of Video)
-        lv_obj_t *btn_aud = lv_btn_create(cont);
-        lv_obj_set_size(btn_aud, 40, 40);
-        lv_obj_align(btn_aud, LV_ALIGN_RIGHT_MID, -45, 0); // Gap
-        lv_obj_set_style_bg_color(btn_aud, lv_palette_main(LV_PALETTE_GREEN), 0);
-        
-        lv_obj_t *lbl_aud = lv_label_create(btn_aud);
-        lv_label_set_text(lbl_aud, LV_SYMBOL_CALL);
-        lv_obj_center(lbl_aud);
-
-        char *num_copy_a = strdup(contacts[i].number);
-        lv_obj_add_event_cb(btn_aud, fav_audio_clicked, LV_EVENT_CLICKED, num_copy_a);
-        lv_obj_add_event_cb(btn_aud, free_user_data, LV_EVENT_DELETE, num_copy_a);
+      // Name/Initials
+      lv_obj_t *lbl = lv_label_create(cont);
+      if (strlen(contacts[i].name) > 0) {
+        lv_label_set_text(lbl, contacts[i].name); // Full Name
+      } else {
+        lv_label_set_text(lbl, contacts[i].number);
       }
+      lv_obj_set_style_text_font(lbl, &lv_font_montserrat_16, 0);
+      lv_obj_align(lbl, LV_ALIGN_LEFT_MID, 5, 0);
+      lv_obj_set_width(lbl, 110); // Limit width
+      lv_label_set_long_mode(lbl, LV_LABEL_LONG_DOT);
+
+      // Video Button (Rightmost)
+      lv_obj_t *btn_vid = lv_btn_create(cont);
+      lv_obj_set_size(btn_vid, 40, 40);
+      lv_obj_align(btn_vid, LV_ALIGN_RIGHT_MID, 0, 0);
+      lv_obj_set_style_bg_color(btn_vid, lv_palette_main(LV_PALETTE_TEAL), 0);
+
+      lv_obj_t *lbl_vid = lv_label_create(btn_vid);
+      lv_label_set_text(lbl_vid, LV_SYMBOL_VIDEO);
+      lv_obj_center(lbl_vid);
+
+      char *num_copy_v = strdup(contacts[i].number);
+      lv_obj_add_event_cb(btn_vid, fav_video_clicked, LV_EVENT_CLICKED,
+                          num_copy_v);
+      lv_obj_add_event_cb(btn_vid, free_user_data, LV_EVENT_DELETE, num_copy_v);
+
+      // Audio Button (Left of Video)
+      lv_obj_t *btn_aud = lv_btn_create(cont);
+      lv_obj_set_size(btn_aud, 40, 40);
+      lv_obj_align(btn_aud, LV_ALIGN_RIGHT_MID, -45, 0); // Gap
+      lv_obj_set_style_bg_color(btn_aud, lv_palette_main(LV_PALETTE_GREEN), 0);
+
+      lv_obj_t *lbl_aud = lv_label_create(btn_aud);
+      lv_label_set_text(lbl_aud, LV_SYMBOL_CALL);
+      lv_obj_center(lbl_aud);
+
+      char *num_copy_a = strdup(contacts[i].number);
+      lv_obj_add_event_cb(btn_aud, fav_audio_clicked, LV_EVENT_CLICKED,
+                          num_copy_a);
+      lv_obj_add_event_cb(btn_aud, free_user_data, LV_EVENT_DELETE, num_copy_a);
+    }
   } else {
-      // Hide Dock
-      lv_obj_add_flag(data->favorites_dock, LV_OBJ_FLAG_HIDDEN);
-      
-      // Align Info to Center -> REMOVED per user request
-      /* if (data->info_cont) {
-           lv_obj_align(data->info_cont, LV_ALIGN_CENTER, 0, 0);
-      } */
+    // Hide Dock
+    lv_obj_add_flag(data->favorites_dock, LV_OBJ_FLAG_HIDDEN);
+
+    // Align Info to Center -> REMOVED per user request
+    /* if (data->info_cont) {
+         lv_obj_align(data->info_cont, LV_ALIGN_CENTER, 0, 0);
+    } */
   }
 }
 
 static void home_key_handler(lv_event_t *e) {
   home_data_t *data = (home_data_t *)lv_event_get_user_data(e);
   uint32_t key = lv_indev_get_key(lv_indev_get_act());
-  
+
   if (key == LV_KEY_RIGHT) {
-      // Go to Apps (1,0)
-      if (data && data->tileview)
-          lv_obj_set_tile_id(data->tileview, 1, 0, LV_ANIM_ON);
+    // Go to Apps (1,0)
+    if (data && data->tileview)
+      lv_obj_set_tile_id(data->tileview, 1, 0, LV_ANIM_ON);
   } else if (key == LV_KEY_LEFT) {
-      // Go to Home (0,0)
-      if (data && data->tileview)
-          lv_obj_set_tile_id(data->tileview, 0, 0, LV_ANIM_ON);
+    // Go to Home (0,0)
+    if (data && data->tileview)
+      lv_obj_set_tile_id(data->tileview, 0, 0, LV_ANIM_ON);
   }
 }
 
@@ -475,18 +497,19 @@ static int home_init(applet_t *applet) {
   // Root Tileview
   data->tileview = lv_tileview_create(applet->screen);
   lv_obj_set_size(data->tileview, LV_PCT(100), LV_PCT(100));
-  lv_obj_set_style_pad_all(data->tileview, 0, 0); // Remove padding
+  lv_obj_set_style_pad_all(data->tileview, 0, 0);      // Remove padding
   lv_obj_set_style_border_width(data->tileview, 0, 0); // Remove border
   // Remove scrollbars
   lv_obj_set_scrollbar_mode(data->tileview, LV_SCROLLBAR_MODE_OFF);
-  
+
   // NOTE: Swapped Coords per User Request (Swipe Direction Change)
   // PAGE 1: Home (Clock/Favs) at (0,0) - LEFT (DEFAULT)
   // Neighbor is (1,0) [Right] -> Apps.
   // Allow Scroll Right to go to Apps.
-  
+
   // PAGE 1: HOME (0,0)
-  lv_obj_t *page_home = lv_tileview_add_tile(data->tileview, 0, 0, LV_DIR_RIGHT);
+  lv_obj_t *page_home =
+      lv_tileview_add_tile(data->tileview, 0, 0, LV_DIR_RIGHT);
 
   // PAGE 2: APPS (1,0)
   lv_obj_t *page_apps = lv_tileview_add_tile(data->tileview, 1, 0, LV_DIR_LEFT);
@@ -503,8 +526,8 @@ static int home_init(applet_t *applet) {
   lv_obj_set_size(data->apps_grid, LV_PCT(90), LV_PCT(80));
   lv_obj_align(data->apps_grid, LV_ALIGN_BOTTOM_MID, 0, -20);
   lv_obj_set_flex_flow(data->apps_grid, LV_FLEX_FLOW_ROW_WRAP);
-  lv_obj_set_flex_align(data->apps_grid, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START,
-                        LV_FLEX_ALIGN_START);
+  lv_obj_set_flex_align(data->apps_grid, LV_FLEX_ALIGN_START,
+                        LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
   lv_obj_set_style_pad_all(data->apps_grid, 10, 0);
   lv_obj_set_style_pad_gap(data->apps_grid, 20, 0);
   lv_obj_set_style_border_width(data->apps_grid, 0, 0);
@@ -554,7 +577,6 @@ static int home_init(applet_t *applet) {
                         applets[i]);
   }
 
-
   // --- Populate HOME PAGE (page_home) ---
 
   // In-Call Button (Hidden by default)
@@ -572,10 +594,12 @@ static int home_init(applet_t *applet) {
   data->incoming_call_btn = lv_btn_create(data->notif_cont);
   lv_obj_set_width(data->incoming_call_btn, 160);
   lv_obj_set_height(data->incoming_call_btn, 50);
-  lv_obj_set_style_bg_color(data->incoming_call_btn, lv_palette_main(LV_PALETTE_RED), 0);
+  lv_obj_set_style_bg_color(data->incoming_call_btn,
+                            lv_palette_main(LV_PALETTE_RED), 0);
   lv_obj_set_style_radius(data->incoming_call_btn, 25, 0);
   lv_obj_add_flag(data->incoming_call_btn, LV_OBJ_FLAG_HIDDEN);
-  lv_obj_add_event_cb(data->incoming_call_btn, incoming_call_clicked, LV_EVENT_CLICKED, NULL);
+  lv_obj_add_event_cb(data->incoming_call_btn, incoming_call_clicked,
+                      LV_EVENT_CLICKED, NULL);
 
   data->incoming_call_label = lv_label_create(data->incoming_call_btn);
   lv_label_set_text(data->incoming_call_label, LV_SYMBOL_CALL " Incoming");
@@ -585,10 +609,12 @@ static int home_init(applet_t *applet) {
   data->in_call_btn = lv_btn_create(data->notif_cont);
   lv_obj_set_width(data->in_call_btn, 160);
   lv_obj_set_height(data->in_call_btn, 50);
-  lv_obj_set_style_bg_color(data->in_call_btn, lv_palette_main(LV_PALETTE_GREEN), 0);
+  lv_obj_set_style_bg_color(data->in_call_btn,
+                            lv_palette_main(LV_PALETTE_GREEN), 0);
   lv_obj_set_style_radius(data->in_call_btn, 25, 0);
-  lv_obj_add_flag(data->in_call_btn, LV_OBJ_FLAG_HIDDEN); 
-  lv_obj_add_event_cb(data->in_call_btn, in_call_clicked, LV_EVENT_CLICKED, NULL);
+  lv_obj_add_flag(data->in_call_btn, LV_OBJ_FLAG_HIDDEN);
+  lv_obj_add_event_cb(data->in_call_btn, in_call_clicked, LV_EVENT_CLICKED,
+                      NULL);
 
   data->in_call_label = lv_label_create(data->in_call_btn);
   lv_label_set_text(data->in_call_label, LV_SYMBOL_CALL " In Call");
@@ -598,11 +624,13 @@ static int home_init(applet_t *applet) {
   data->missed_call_btn = lv_btn_create(data->notif_cont);
   lv_obj_set_width(data->missed_call_btn, 160);
   lv_obj_set_height(data->missed_call_btn, 50);
-  lv_obj_set_style_bg_color(data->missed_call_btn, lv_palette_main(LV_PALETTE_ORANGE), 0);
+  lv_obj_set_style_bg_color(data->missed_call_btn,
+                            lv_palette_main(LV_PALETTE_ORANGE), 0);
   lv_obj_set_style_radius(data->missed_call_btn, 25, 0);
   lv_obj_add_flag(data->missed_call_btn, LV_OBJ_FLAG_HIDDEN);
-  lv_obj_add_event_cb(data->missed_call_btn, missed_call_clicked, LV_EVENT_CLICKED, NULL);
-  
+  lv_obj_add_event_cb(data->missed_call_btn, missed_call_clicked,
+                      LV_EVENT_CLICKED, NULL);
+
   data->missed_call_label = lv_label_create(data->missed_call_btn);
   lv_label_set_text(data->missed_call_label, "Missed Call");
   lv_obj_center(data->missed_call_label);
@@ -611,10 +639,12 @@ static int home_init(applet_t *applet) {
   data->unread_msg_btn = lv_btn_create(data->notif_cont);
   lv_obj_set_width(data->unread_msg_btn, 160);
   lv_obj_set_height(data->unread_msg_btn, 50);
-  lv_obj_set_style_bg_color(data->unread_msg_btn, lv_palette_main(LV_PALETTE_BLUE), 0);
+  lv_obj_set_style_bg_color(data->unread_msg_btn,
+                            lv_palette_main(LV_PALETTE_BLUE), 0);
   lv_obj_set_style_radius(data->unread_msg_btn, 25, 0);
   lv_obj_add_flag(data->unread_msg_btn, LV_OBJ_FLAG_HIDDEN);
-  lv_obj_add_event_cb(data->unread_msg_btn, unread_msg_clicked, LV_EVENT_CLICKED, NULL);
+  lv_obj_add_event_cb(data->unread_msg_btn, unread_msg_clicked,
+                      LV_EVENT_CLICKED, NULL);
 
   data->unread_msg_label = lv_label_create(data->unread_msg_btn);
   lv_label_set_text(data->unread_msg_label, "New Message");
@@ -624,28 +654,31 @@ static int home_init(applet_t *applet) {
   lv_obj_t *info_cont = lv_obj_create(page_home);
   lv_obj_set_size(info_cont, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
   // Center Horizontally, 30% Height
-  lv_obj_align(info_cont, LV_ALIGN_TOP_MID, 0, LV_PCT(30)); 
+  lv_obj_align(info_cont, LV_ALIGN_TOP_MID, 0, LV_PCT(30));
   lv_obj_set_flex_flow(info_cont, LV_FLEX_FLOW_COLUMN);
-  lv_obj_set_flex_align(info_cont, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+  lv_obj_set_flex_align(info_cont, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER,
+                        LV_FLEX_ALIGN_CENTER);
   lv_obj_set_style_bg_opa(info_cont, 0, 0);
   lv_obj_set_style_border_width(info_cont, 0, 0);
   lv_obj_set_style_pad_all(info_cont, 0, 0);
   lv_obj_set_style_pad_gap(info_cont, 5, 0);
-  
+
   data->info_cont = info_cont;
 
   // Account Info Button (Top Left)
   // Parent changed from info_cont to page_home
-  data->account_btn = lv_btn_create(page_home); 
+  data->account_btn = lv_btn_create(page_home);
   lv_obj_set_size(data->account_btn, LV_SIZE_CONTENT, 40);
   lv_obj_align(data->account_btn, LV_ALIGN_TOP_LEFT, 25, 25);
   lv_obj_set_style_bg_opa(data->account_btn, 0, 0); // Transparent
   lv_obj_set_style_shadow_width(data->account_btn, 0, 0);
   lv_obj_set_flex_flow(data->account_btn, LV_FLEX_FLOW_ROW);
-  lv_obj_set_flex_align(data->account_btn, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+  lv_obj_set_flex_align(data->account_btn, LV_FLEX_ALIGN_CENTER,
+                        LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
   lv_obj_set_style_pad_all(data->account_btn, 5, 0);
   lv_obj_set_style_pad_gap(data->account_btn, 8, 0);
-  lv_obj_add_event_cb(data->account_btn, account_info_clicked, LV_EVENT_CLICKED, NULL);
+  lv_obj_add_event_cb(data->account_btn, account_info_clicked, LV_EVENT_CLICKED,
+                      NULL);
 
   data->account_icon = lv_label_create(data->account_btn);
   lv_label_set_text(data->account_icon, LV_SYMBOL_SETTINGS); // Placeholder
@@ -654,7 +687,9 @@ static int home_init(applet_t *applet) {
   data->account_label = lv_label_create(data->account_btn);
   lv_label_set_text(data->account_label, "Account");
   lv_obj_set_style_text_font(data->account_label, &lv_font_montserrat_20, 0);
-  lv_obj_set_style_text_color(data->account_label, lv_palette_main(LV_PALETTE_BLUE), 0); // User requested Blue
+  lv_obj_set_style_text_color(data->account_label,
+                              lv_palette_main(LV_PALETTE_BLUE),
+                              0); // User requested Blue
 
   // Clock (Middle)
   data->clock_label = lv_label_create(info_cont);
@@ -664,7 +699,8 @@ static int home_init(applet_t *applet) {
   // Date (Bottom)
   data->date_label = lv_label_create(info_cont);
   lv_obj_set_style_text_font(data->date_label, &lv_font_montserrat_20, 0);
-  lv_obj_set_style_text_color(data->date_label, lv_palette_main(LV_PALETTE_BLUE), 0);
+  lv_obj_set_style_text_color(data->date_label,
+                              lv_palette_main(LV_PALETTE_BLUE), 0);
 
   // Favorites Dock
   data->favorites_dock = lv_obj_create(page_home);
@@ -686,7 +722,7 @@ static int home_init(applet_t *applet) {
   // So Apps is to the RIGHT of Home.
   // Swipe Left (finger moves left) pulls content from Right.
   // Yes.
-  
+
   // Set Default Page to Home (0,0)
   lv_obj_set_tile_id(data->tileview, 0, 0, LV_ANIM_OFF);
 
@@ -712,9 +748,9 @@ static void home_start(applet_t *applet) {
   (void)applet;
   log_info("HomeApplet", "Started");
   home_data_t *data = (home_data_t *)applet->user_data;
-  
+
   if (data) {
-      refresh_account_data(data); // Initial load
+    refresh_account_data(data); // Initial load
   }
 
   // Refocus tileview on start
@@ -735,8 +771,8 @@ static void home_resume(applet_t *applet) {
 
     // Restart Timer if missing
     if (!data->clock_timer) {
-         data->clock_timer = lv_timer_create(update_clock, 1000, data);
-         update_clock(data->clock_timer); // Instant update
+      data->clock_timer = lv_timer_create(update_clock, 1000, data);
+      update_clock(data->clock_timer); // Instant update
     }
 
     // Restore focus to tileview
@@ -756,8 +792,8 @@ static void home_pause(applet_t *applet) {
   log_debug("HomeApplet", "Paused");
   home_data_t *data = (home_data_t *)applet->user_data;
   if (data && data->clock_timer) {
-      lv_timer_del(data->clock_timer);
-      data->clock_timer = NULL;
+    lv_timer_del(data->clock_timer);
+    data->clock_timer = NULL;
   }
 }
 
